@@ -4,13 +4,19 @@ Glossario del linguaggio di dominio di Quaero, assistente legale AI per il dirit
 
 ## Pratiche
 
-**Pratica**:
-Un singolo incarico o affare legale, identificato da cliente + oggetto (es. "Alfa S.r.l. / Contratto fornitura"). È l'unità di lavoro che raggruppa documenti e conversazioni. Un **Cliente** può avere più Pratiche.
-_Avoid_: Fascicolo, caso, matter
+Gerarchia: **Cliente → Pratica → Fascicolo → Documento** (e più in generale → Fonte).
 
 **Cliente**:
-La persona o organizzazione per cui l'avvocato svolge una Pratica.
+Il soggetto per cui l'avvocato lavora (es. Alfa S.r.l., Banca Beta, Rossi Mario). Un Cliente può avere più Pratiche.
 _Avoid_: Assistito, parte
+
+**Pratica**:
+Il singolo incarico professionale (es. "Recupero credito verso Gamma S.r.l.", "Operazione UTP posizione Rossi", "Parere sulla garanzia MCC"). Appartiene a un Cliente e contiene uno o più Fascicoli, oltre a chat, memoria, strategia e attività.
+_Avoid_: caso, matter
+
+**Fascicolo**:
+Un raggruppamento organizzativo di Fonti all'interno di una Pratica (es. Atti processuali, Corrispondenza, Giurisprudenza, Dottrina, Note strategiche, Output AI). Una Pratica può avere più Fascicoli.
+_Avoid_: cartella, faldone, folder
 
 ## Fonti
 
