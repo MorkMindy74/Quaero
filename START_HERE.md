@@ -37,6 +37,8 @@ Backlog glossario (non bloccante): Strategia, Connettore, Timeline, Workflow/Tas
 | 0007 | Si citano **Estratti di Fonte**, non Fonti (anti-allucinazione) |
 | 0008 | Gerarchia Pratica/Fascicolo; il Fascicolo è una vista (molti-a-molti) |
 | 0009 | Genealogia del Documento come **grafo di provenienza** (audit/responsabilità) |
+| 0010 | Stack frontend: React + TypeScript + Vite + Tailwind + i18next + Vitest + RTL |
+| 0011 | Sicurezza Tauri (capabilities minime), IPC tipizzato, `core` resta Tauri-free |
 
 ## Issue aperte (GitHub)
 
@@ -79,4 +81,10 @@ Backlog glossario (non bloccante): Strategia, Connettore, Timeline, Workflow/Tas
 
 (in alternativa, aprire prima la issue con `gh issue view 2 --comments`).
 
-Regola d'oro: **niente codice prima di aver riletto il checkpoint e confermato il piano.**
+Prima di iniziare, verificare l'ambiente:
+
+```
+rustc --version ; cargo --version ; node --version ; pnpm --version ; rustup show
+```
+
+Regola d'oro: **niente codice prima di aver riletto il checkpoint e confermato il piano.** La #2 non produce funzionalità, produce confini architetturali corretti.
