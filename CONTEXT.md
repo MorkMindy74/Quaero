@@ -87,8 +87,8 @@ _Avoid_: draft, abbozzo
 Un sottotipo di Documento: un atto giudiziario (es. comparsa, ricorso, memoria, citazione, appello). Non è la categoria generale dell'output. Non tutte le Bozze diventano Atti; molte diventano semplici Documenti.
 
 **Genealogia**:
-La catena completa di provenienza di un Documento, sempre ricostruibile: Documento finale ← versione precedente ← Bozza ← Output ← Fonti utilizzate. È il fondamento di audit, responsabilità professionale, spiegabilità e futura certificazione delle risposte AI.
-_Avoid_: provenienza, storia, lineage
+Il **grafo di provenienza** (DAG, non una catena lineare) completo e ricostruibile di un Documento: Fonti, Estratti di Fonte, prompt, Output AI, Bozze, versioni intermedie, interventi umani, validazioni, export e firme. Ogni nodo porta metadati minimi (autore AI/umano, timestamp, modello, Fonti/Estratti, tipo di operazione). Non viene cancellata quando una Bozza diventa Documento; la validazione umana qualifica l'origine AI, non la elimina. È il fondamento di audit, responsabilità professionale, spiegabilità e certificazione del lavoro AI-assisted.
+_Avoid_: provenienza, storia, lineage, catena
 
 ## Flagged ambiguities
 
