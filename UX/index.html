@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quaero - Legal AI Workspace</title>
+    <style>
+      :root {
+        --page: #f3efe6;
+        --panel: #fbf8f0;
+        --panel-strong: #fffdf7;
+        --line: #ddd5c7;
+        --line-soft: #ebe4d7;
+        --text: #201f1c;
+        --muted: #756f64;
+        --soft: #9a9284;
+        --accent: #8f5d46;
+        --accent-strong: #6f3f2d;
+        --olive: #596852;
+        --blue: #536f7f;
+        --gold: #b78942;
+        --danger: #a14e3d;
+        --shadow: 0 18px 60px rgba(70, 55, 34, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          linear-gradient(180deg, rgba(255, 253, 247, 0.9), rgba(243, 239, 230, 0.96)),
+          radial-gradient(circle at 15% 10%, rgba(183, 137, 66, 0.16), transparent 34%),
+          var(--page);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+        background: transparent;
+      }
+
+      .app {
+        display: grid;
+        grid-template-rows: 48px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--line-soft);
+        background: rgba(251, 248, 240, 0.78);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand,
+      .top-actions,
+      .icon-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--accent-strong);
+        background: var(--panel-strong);
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 720;
+      }
+
+      .brand span,
+      .matter-pill,
+      .tiny {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .icon-btn {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: var(--muted);
+      }
+
+      .icon-btn:hover,
+      .icon-btn.active {
+        border-color: var(--line);
+        color: var(--text);
+        background: var(--panel-strong);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 300px minmax(420px, 1fr) 370px;
+        gap: 12px;
+        min-height: 0;
+        padding: 12px;
+      }
+
+      .panel {
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(251, 248, 240, 0.9);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .sidebar,
+      .main,
+      .right-stack {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 48px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        font-weight: 680;
+        font-size: 14px;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 3px;
+        padding: 4px;
+        margin: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #eee7d9;
+      }
+
+      .segmented button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-width: 0;
+        height: 34px;
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .segmented button.active {
+        color: var(--text);
+        background: var(--panel-strong);
+        box-shadow: 0 1px 6px rgba(70, 55, 34, 0.11);
+      }
+
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 36px;
+        margin: 0 10px 10px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--panel-strong);
+        color: var(--soft);
+      }
+
+      .search input {
+        width: 100%;
+        min-width: 0;
+        border: 0;
+        outline: 0;
+        color: var(--text);
+        background: transparent;
+      }
+
+      .list {
+        min-height: 0;
+        padding: 4px 10px 12px;
+        overflow: auto;
+      }
+
+      .section-label {
+        margin: 14px 6px 7px;
+        color: var(--soft);
+        font-size: 11px;
+        font-weight: 720;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .matter {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        min-height: 54px;
+        padding: 8px;
+        border-radius: 8px;
+      }
+
+      .matter.active,
+      .matter:hover {
+        background: #eee7d9;
+      }
+
+      .matter-icon {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--olive);
+        background: var(--panel-strong);
+      }
+
+      .matter-name {
+        overflow: hidden;
+        font-size: 13px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .matter-meta {
+        margin-top: 3px;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        height: 22px;
+        padding: 0 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        background: var(--panel-strong);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .main {
+        min-height: 0;
+      }
+
+      .matter-context {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .matter-context strong {
+        overflow: hidden;
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chat {
+        min-height: 0;
+        flex: 1;
+        padding: 20px 28px;
+        overflow: auto;
+      }
+
+      .message {
+        max-width: 820px;
+        margin: 0 auto 22px;
+      }
+
+      .message-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .message-card {
+        padding: 16px 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-strong);
+      }
+
+      .message.user .message-card {
+        margin-left: auto;
+        max-width: 720px;
+        border-color: #d6c7b5;
+        background: #efe4d4;
+      }
+
+      .message-card p {
+        margin: 0 0 12px;
+        line-height: 1.48;
+      }
+
+      .message-card p:last-child {
+        margin-bottom: 0;
+      }
+
+      .source-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .source {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: #f6f0e5;
+      }
+
+      .source strong {
+        display: block;
+        overflow: hidden;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .source span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .composer {
+        padding: 12px;
+        border-top: 1px solid var(--line-soft);
+        background: rgba(251, 248, 240, 0.92);
+      }
+
+      .composer-box {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: end;
+        gap: 10px;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel-strong);
+      }
+
+      .composer textarea {
+        width: 100%;
+        height: 42px;
+        min-height: 42px;
+        max-height: 120px;
+        resize: vertical;
+        border: 0;
+        outline: 0;
+        color: var(--text);
+        background: transparent;
+      }
+
+      .send {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 9px;
+        color: #fffaf2;
+        background: var(--accent-strong);
+      }
+
+      .right-stack {
+        gap: 12px;
+        min-height: 0;
+        box-shadow: none;
+        overflow: visible;
+        background: transparent;
+        border: 0;
+      }
+
+      .preview {
+        flex: 1 1 58%;
+      }
+
+      .audit {
+        flex: 1 1 42%;
+      }
+
+      .preview-body,
+      .audit-body {
+        min-height: 0;
+        padding: 12px;
+        overflow: auto;
+      }
+
+      .doc-preview {
+        min-height: 440px;
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fffdf9;
+        box-shadow: inset 0 0 0 1px #f4efe5;
+      }
+
+      .doc-preview h2 {
+        margin: 0 0 8px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .doc-preview p {
+        margin: 0 0 12px;
+        color: #3c3730;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .highlight {
+        padding: 1px 3px;
+        border-radius: 4px;
+        background: #ead7ad;
+      }
+
+      .agent-run {
+        display: grid;
+        gap: 9px;
+      }
+
+      .agent {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        padding: 9px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: var(--panel-strong);
+      }
+
+      .agent-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--olive);
+        box-shadow: 0 0 0 5px rgba(89, 104, 82, 0.12);
+        justify-self: center;
+      }
+
+      .agent-dot.waiting {
+        background: var(--gold);
+        box-shadow: 0 0 0 5px rgba(183, 137, 66, 0.16);
+      }
+
+      .agent-dot.alert {
+        background: var(--danger);
+        box-shadow: 0 0 0 5px rgba(161, 78, 61, 0.14);
+      }
+
+      .agent strong {
+        display: block;
+        overflow: hidden;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .agent span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .tool-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 12px;
+      }
+
+      .tool-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        background: var(--panel-strong);
+        font-size: 12px;
+      }
+
+      svg {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        stroke-width: 1.8;
+      }
+
+      @media (max-width: 1180px) {
+        .workspace {
+          grid-template-columns: 270px minmax(360px, 1fr);
+        }
+
+        .right-stack {
+          display: none;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .workspace {
+          grid-template-columns: 1fr;
+          padding: 8px;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .chat {
+          padding: 16px 12px;
+        }
+
+        .source-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <button class="icon-btn" title="Menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <div class="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M12 3v18M5 7h14M7 7l-3 7h6L7 7ZM17 7l-3 7h6l-3-7Z" />
+            </svg>
+          </div>
+          <div>
+            <h1>Quaero</h1>
+            <span>Legal AI Workspace locale</span>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <span class="matter-pill">Studio Rossi · Modalita locale</span>
+          <button class="icon-btn active" title="Workspace">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+            </svg>
+          </button>
+          <button class="icon-btn" title="Impostazioni">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.06A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.06A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 1 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.06A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4H21a2 2 0 1 1 0 4h-.06a1.7 1.7 0 0 0-1.54.6Z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="panel sidebar">
+          <div class="segmented">
+            <button class="active" title="Chat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" />
+              </svg>
+              Chat
+            </button>
+            <button title="Fonti">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
+              </svg>
+              Fonti
+            </button>
+            <button title="Servizi">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9 4.9 19.1" />
+              </svg>
+              Servizi
+            </button>
+          </div>
+
+          <label class="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input placeholder="Cerca pratica, atto, fonte" />
+          </label>
+
+          <div class="list">
+            <div class="section-label">Pratiche recenti</div>
+            <button class="matter active">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M4 20h16M6 20V8l6-4 6 4v12M9 20v-6h6v6" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">Alfa S.r.l. / Contratto fornitura</span>
+                <span class="matter-meta">12 documenti · revisione clausole</span>
+              </span>
+              <span class="badge">Attiva</span>
+            </button>
+            <button class="matter">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                  <path d="M14 2v6h6" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">Ricorso lavoro / Bianchi</span>
+                <span class="matter-meta">Bozza atto · giurisprudenza</span>
+              </span>
+              <span class="badge">3</span>
+            </button>
+            <button class="matter">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M3 7h18M5 7v13h14V7M9 7V4h6v3" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">Due diligence immobiliare</span>
+                <span class="matter-meta">Visure · note · checklist</span>
+              </span>
+              <span class="badge">PDF</span>
+            </button>
+
+            <div class="section-label">Connettori</div>
+            <button class="matter">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M4 4h16v16H4z" />
+                  <path d="M8 8h8M8 12h8M8 16h5" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">Normattiva</span>
+                <span class="matter-meta">Ricerca norme e versioni</span>
+              </span>
+              <span class="badge">On</span>
+            </button>
+            <button class="matter">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 3 3 8l9 5 9-5-9-5Z" />
+                  <path d="M3 16l9 5 9-5M3 12l9 5 9-5" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">Banche dati giurisprudenza</span>
+                <span class="matter-meta">Cassazione · merito · massime</span>
+              </span>
+              <span class="badge">Beta</span>
+            </button>
+            <button class="matter">
+              <span class="matter-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  <rect x="5" y="11" width="14" height="10" rx="2" />
+                </svg>
+              </span>
+              <span>
+                <span class="matter-name">CNS e firma digitale</span>
+                <span class="matter-meta">PAdES · CAdES · smart card</span>
+              </span>
+              <span class="badge">Locale</span>
+            </button>
+          </div>
+        </aside>
+
+        <section class="panel main">
+          <div class="panel-head">
+            <div class="matter-context">
+              <div class="panel-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+                  <path d="M8 12h8M12 8v8" />
+                </svg>
+                <strong>Alfa S.r.l. / Contratto fornitura</strong>
+              </div>
+              <span class="badge">Privato · locale</span>
+            </div>
+            <div class="icon-row">
+              <button class="icon-btn" title="Allega documento">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l8.5-8.5a4 4 0 0 1 5.7 5.7l-8.6 8.5a2 2 0 1 1-2.8-2.8l7.8-7.8" />
+                </svg>
+              </button>
+              <button class="icon-btn" title="Avvia agenti">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="chat">
+            <article class="message user">
+              <div class="message-head">
+                <span>Avv. Rossi · richiesta</span>
+                <span>09:42</span>
+              </div>
+              <div class="message-card">
+                <p>
+                  Analizza il contratto di fornitura e dimmi se la clausola di recesso espone Alfa
+                  a un rischio eccessivo. Voglio una risposta citata e una proposta di modifica.
+                </p>
+              </div>
+            </article>
+
+            <article class="message">
+              <div class="message-head">
+                <span>Quaero · analisi verificata</span>
+                <span>3 strumenti · 4 fonti</span>
+              </div>
+              <div class="message-card">
+                <p>
+                  La clausola 7.2 consente al fornitore di recedere con preavviso di 15 giorni anche
+                  in presenza di ordini gia accettati. Per Alfa il rischio principale e la perdita di
+                  continuita operativa senza un periodo minimo di transizione.
+                </p>
+                <p>
+                  Suggerisco di limitare il recesso ordinario ai soli ordini non ancora confermati e
+                  di introdurre un obbligo di continuita per 60 giorni sulle forniture essenziali.
+                </p>
+                <div class="source-grid">
+                  <button class="source">
+                    <strong>Contratto.pdf · pag. 8</strong>
+                    <span>Clausola 7.2, recesso</span>
+                  </button>
+                  <button class="source">
+                    <strong>Codice civile</strong>
+                    <span>Art. 1375 · buona fede</span>
+                  </button>
+                  <button class="source">
+                    <strong>Nota interna</strong>
+                    <span>Fornitura critica reparto A</span>
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="composer">
+            <div class="composer-box">
+              <button class="icon-btn" title="Aggiungi file">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+              <textarea placeholder="Chiedi a Quaero di ricercare, redigere, verificare o confrontare documenti"></textarea>
+              <button class="send" title="Invia">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M22 2 11 13" />
+                  <path d="m22 2-7 20-4-9-9-4 20-7Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="right-stack">
+          <section class="panel preview">
+            <div class="panel-head">
+              <div class="panel-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                  <path d="M14 2v6h6M8 13h8M8 17h5" />
+                </svg>
+                Evidence
+              </div>
+              <span class="badge">Contratto.pdf</span>
+            </div>
+            <div class="preview-body">
+              <div class="doc-preview">
+                <h2>Contratto di fornitura continuativa</h2>
+                <p>
+                  Art. 7 - Durata e recesso. Il presente contratto decorre dalla data di
+                  sottoscrizione e resta valido per dodici mesi.
+                </p>
+                <p>
+                  7.2 Il Fornitore potra recedere dal contratto mediante comunicazione scritta con
+                  <span class="highlight">preavviso di quindici giorni</span>, senza obbligo di
+                  completare gli ordini programmati, salvo diverso accordo tra le parti.
+                </p>
+                <p>
+                  7.3 Le parti si impegnano a cooperare secondo buona fede nella fase di chiusura
+                  del rapporto.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel audit">
+            <div class="panel-head">
+              <div class="panel-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M9 11 12 14 22 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                </svg>
+                Agent Run
+              </div>
+              <span class="tiny">Audit locale</span>
+            </div>
+            <div class="audit-body">
+              <div class="agent-run">
+                <div class="agent">
+                  <span class="agent-dot"></span>
+                  <span>
+                    <strong>Analista documentale</strong>
+                    <span>Estratte 14 clausole rilevanti</span>
+                  </span>
+                  <span class="badge">OK</span>
+                </div>
+                <div class="agent">
+                  <span class="agent-dot"></span>
+                  <span>
+                    <strong>Ricercatore normativo</strong>
+                    <span>Collegati art. 1375 e 1569 c.c.</span>
+                  </span>
+                  <span class="badge">OK</span>
+                </div>
+                <div class="agent">
+                  <span class="agent-dot waiting"></span>
+                  <span>
+                    <strong>Verificatore citazioni</strong>
+                    <span>Controllo fonti prima della bozza</span>
+                  </span>
+                  <span class="badge">Run</span>
+                </div>
+                <div class="agent">
+                  <span class="agent-dot alert"></span>
+                  <span>
+                    <strong>Privacy guard</strong>
+                    <span>Nessun dato inviato a provider esterni</span>
+                  </span>
+                  <span class="badge">Lock</span>
+                </div>
+              </div>
+
+              <div class="tool-row">
+                <span class="tool-chip">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" />
+                  </svg>
+                  Normattiva
+                </span>
+                <span class="tool-chip">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <path d="M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  Esporta DOCX
+                </span>
+                <span class="tool-chip">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    <rect x="5" y="11" width="14" height="10" rx="2" />
+                  </svg>
+                  CNS
+                </span>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>
