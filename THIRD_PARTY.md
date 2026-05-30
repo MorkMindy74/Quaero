@@ -18,6 +18,7 @@ Prima di integrare codice esterno:
 | [willchen96/mike](https://github.com/willchen96/mike) | AGPL-3.0 | ispirazione UX/feature; codice riusabile |
 | [SemplificaAI/MikeRust](https://github.com/SemplificaAI/MikeRust) | AGPL-3.0 | base Rust locale; codice riusabile |
 | [AnttiHero/lavern](https://github.com/AnttiHero/lavern) | Apache-2.0 | feature da assorbire in AGPL |
+| [strukto-ai/mirage](https://github.com/strukto-ai/mirage) | Apache-2.0 | filesystem virtuale/sandbox per agenti — tecnica candidata per il Privacy guard (futuro, vedi issue #9) |
 
 ## Codice effettivamente riusato
 
