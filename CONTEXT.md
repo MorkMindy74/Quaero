@@ -24,7 +24,7 @@ _Avoid_: cartella, faldone, folder, scatola, contenitore
 Qualunque entità verificabile che può essere citata a supporto di un'affermazione. È il concetto generale; ha nove tipi. Il **Documento** è solo uno di questi.
 
 **Documento**:
-Un file concreto acquisito in una Pratica (es. Contratto.pdf, Sentenza.pdf, Bilancio.xlsx, Email.eml). Tipo di Fonte.
+Un file salvato in una Pratica, **acquisito** dall'esterno (es. Contratto.pdf, Sentenza.pdf, Bilancio.xlsx) **o derivato** da una Bozza validata dall'avvocato. È una Fonte citabile. Un **Atto** ne è un sottotipo.
 _Avoid_: file, allegato
 
 **Norma**:
@@ -73,9 +73,28 @@ _Avoid_: reference, rimando
 L'output che Quaero produce a una richiesta dell'avvocato in una Pratica, composto da Affermazioni ciascuna corredata di Citazioni.
 _Avoid_: output, messaggio
 
+## Produzione e provenienza
+
+**Output**:
+Qualunque artefatto generato da Quaero, testuale, strutturato o visuale (es. bozza di atto, memo, parere, email, timeline, strategia, checklist, report).
+_Avoid_: artefatto, risultato
+
+**Bozza**:
+Un Output **non ancora validato** da un essere umano. Conserva i metadati di origine (autore AI, modello, data di generazione, origine/prompt, stato di revisione). Va sempre verificata prima di diventare Documento.
+_Avoid_: draft, abbozzo
+
+**Atto**:
+Un sottotipo di Documento: un atto giudiziario (es. comparsa, ricorso, memoria, citazione, appello). Non è la categoria generale dell'output. Non tutte le Bozze diventano Atti; molte diventano semplici Documenti.
+
+**Genealogia**:
+La catena completa di provenienza di un Documento, sempre ricostruibile: Documento finale ← versione precedente ← Bozza ← Output ← Fonti utilizzate. È il fondamento di audit, responsabilità professionale, spiegabilità e futura certificazione delle risposte AI.
+_Avoid_: provenienza, storia, lineage
+
 ## Flagged ambiguities
 
 **Fonte Esterna vs Norma/Giurisprudenza recuperate online**: una Norma recuperata da Normattiva resta una **Norma**, non una Fonte Esterna; una pronuncia recuperata da una banca dati resta **Giurisprudenza**. La classificazione segue il *tipo di contenuto*, non la provenienza. "Fonte Esterna" è il tipo residuale per risorse esterne prive di un tipo legale più ricco.
+
+**Risposta vs Output**: la **Risposta** è l'output conversazionale in chat (Affermazioni + Citazioni). L'**Output** è un artefatto producibile/esportabile (bozza di atto, memo, report…) che, una volta validato, diventa Documento. Entrambi sono generati dalla macchina e devono portare con sé la Genealogia.
 
 ## Example dialogue
 
