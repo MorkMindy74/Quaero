@@ -12,7 +12,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**.
 - Definiti: PRD, glossario di dominio, 11 ADR, 14 slice di lavoro.
 - Implementato in #2: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima. **2 test Rust + 3 test frontend** verdi; app **avviata in dev mode e verificata** visivamente.
-- Mockup estetico di riferimento: `UX/index.html` (il design vero è la slice #3).
+- **Processo:** da ora ogni modifica passa da **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
+- Mockup estetico di riferimento: `UX/index.html` (il design vero è la slice #3, preceduta da una fase di UX Discovery).
 
 ## Glossario core (dettaglio in [`CONTEXT.md`](CONTEXT.md))
 
