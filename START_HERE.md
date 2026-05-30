@@ -24,7 +24,7 @@ produzione     Output → Bozza → Documento → (Atto), con Genealogia (grafo 
 
 Backlog glossario (non bloccante): Strategia, Connettore, Timeline, Workflow/Task, Ruolo/Permessi.
 
-## ADR approvati (`docs/adr/`)
+## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
 |-----|-----------|
@@ -72,7 +72,7 @@ Backlog glossario (non bloccante): Strategia, Connettore, Timeline, Workflow/Tas
 ## Quando ripartiamo sulla #2
 
 1. Leggere questo file e [`docs/plans/issue-02-skeleton.md`](docs/plans/issue-02-skeleton.md).
-2. Confermare il piano della #2.
+2. Confermare il piano della #2 — che deve rispettare anche **ADR-0010** (stack frontend) e **ADR-0011** (sicurezza Tauri, IPC tipizzato, confine `core` ↔ Tauri), oltre agli ADR 0001–0009.
 3. Solo allora iniziare, con approccio **TDD**. Comando:
 
 ```
