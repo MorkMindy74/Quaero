@@ -96,6 +96,10 @@ _Avoid_: provenienza, storia, lineage, catena
 
 **Risposta vs Output**: la **Risposta** è l'output conversazionale in chat (Affermazioni + Citazioni). L'**Output** è un artefatto producibile/esportabile (bozza di atto, memo, report…) che, una volta validato, diventa Documento. Entrambi sono generati dalla macchina e devono portare con sé la Genealogia.
 
+## Backlog glossario (da definire, non bloccanti per partire)
+
+Termini non ancora consolidati, da grigliare quando diventano rilevanti: **Strategia**, **Connettore**, **Timeline**, **Workflow/Task**, **Ruolo/Permessi**.
+
 ## Example dialogue
 
 > **Dev**: L'avvocato chiede "la clausola 7.2 è rischiosa?". Quaero risponde. Cosa cita?
