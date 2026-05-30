@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TabButton } from "../ui";
-import { SourceCard, ExcerptCard, ReasoningStep, GenealogyPreview } from "../cards";
+import { SourceCard, ExcerptCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import {
   sources,
   excerpts,
@@ -53,7 +53,12 @@ export function RightContextPanel() {
               {item.note}
             </div>
           ))}
-        {tab === "genealogy" && <GenealogyPreview nodes={genealogyNodes} />}
+        {tab === "genealogy" && (
+          <>
+            <NormativeGenealogyCard />
+            <GenealogyPreview nodes={genealogyNodes} />
+          </>
+        )}
         {tab === "agent" &&
           agentActivity.map((row) => (
             <div key={row.id} className="flex items-center justify-between rounded border border-hairline bg-panel p-2 text-sm">

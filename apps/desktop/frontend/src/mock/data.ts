@@ -80,6 +80,34 @@ export const memoryItems: MockMemoryItem[] = [
   { id: "m2", key: "Scadenza", note: "Verificare la prescrizione entro 30 giorni." },
 ];
 
+export interface MockNormativeVersion {
+  id: string;
+  date: string;
+  label: string;
+  current: boolean;
+}
+
+export interface MockNormativeGenealogy {
+  norma: string;
+  status: string;
+  timeline: MockNormativeVersion[];
+  alert: string;
+  linkedSources: string[];
+}
+
+// Mock only — illustrative labels, no scraping, no real normative data.
+export const normativeGenealogy: MockNormativeGenealogy = {
+  norma: "Art. 1375 c.c.",
+  status: "versione vigente",
+  timeline: [
+    { id: "nv1", date: "1942", label: "testo originario", current: false },
+    { id: "nv2", date: "1985", label: "modifica", current: false },
+    { id: "nv3", date: "oggi", label: "vigente", current: true },
+  ],
+  alert: "Nessuna modifica nota negli ultimi 12 mesi (mock).",
+  linkedSources: ["Art. 1175 c.c.", "Cass. civ. 12345/2024"],
+};
+
 export interface MockAgentRow {
   id: string;
   label: string;

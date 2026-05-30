@@ -40,6 +40,14 @@ test("switching the context tab to Excerpts changes the card list", () => {
   expect(within(context).getByText(/Il Fornitore potrà recedere/)).toBeInTheDocument();
 });
 
+test("the genealogy tab shows the normative genealogy mock", () => {
+  render(<App />);
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Genealogia" }));
+  expect(within(context).getByText("Genealogia normativa")).toBeInTheDocument();
+  expect(within(context).getByText("Art. 1375 c.c.")).toBeInTheDocument();
+});
+
 test("the mode switcher swaps the workspace surface", () => {
   render(<App />);
   fireEvent.click(screen.getByRole("button", { name: "Ragionamento" }));
