@@ -20,8 +20,8 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
+        # Version is read from "packageManager" in package.json (pnpm@11.5.0).
+        # Do not also set "version" here, or action-setup errors on the mismatch.
 
       - name: Setup Node
         uses: actions/setup-node@v4
