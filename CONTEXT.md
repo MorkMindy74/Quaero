@@ -15,7 +15,7 @@ Il singolo incarico professionale (es. "Recupero credito verso Gamma S.r.l.", "O
 _Avoid_: caso, matter
 
 **Fascicolo**:
-Un raggruppamento organizzativo di Fonti all'interno di una Pratica (es. Atti processuali, Corrispondenza, Giurisprudenza, Dottrina, Note strategiche, Output AI). Una Pratica può avere più Fascicoli.
+Un raggruppamento organizzativo di Fonti all'interno di una Pratica (es. Atti processuali, Corrispondenza, Giurisprudenza, Dottrina, Note strategiche, Output AI). Una Pratica può avere più Fascicoli, e una stessa Fonte può comparire in più Fascicoli (molti-a-molti). Un Fascicolo può essere dinamico (derivato dal Tipo di Fonte) o manuale (curato dall'utente).
 _Avoid_: cartella, faldone, folder
 
 ## Fonti
