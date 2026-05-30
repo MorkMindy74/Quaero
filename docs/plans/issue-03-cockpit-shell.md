@@ -27,14 +27,17 @@ Renderizzare la schermata *"Matter workspace open"* come **shell React a 5 regio
 **Component primitives minimi:**
 - `Button` · `Panel` · `Badge` · `SearchInput` · `TabButton` · `ListRow`
 
-> **Nota di raccordo con la Screen Spec v0.2:** la spec elenca 14 componenti, inclusi i leaf `SourceCard`, `ExcerptCard`, `ReasoningStep`, `GenealogyPreview` e i controlli `CommandPaletteTrigger`, `MatterSelector`. In questo scope ridotto i contenuti dei 6 tab e dei 5 modi sono renderizzati **componendo le primitive** (`Panel`/`ListRow`/`Badge`) con dati mock. Da confermare in fase di approvazione se i leaf-card e `MatterSelector`/`CommandPaletteTrigger` entrano nella #3 (come da acceptance §10 della spec: ⌘K stub, MatterSelector che aggiorna l'header) o se alcuni slittano a una slice di rifinitura. **Decisione dell'utente all'approvazione.**
+**Leaf / componenti presentazionali (solo mock):**
+- `SourceCard` · `ExcerptCard` · `ReasoningStep` · `GenealogyPreview` · `MatterSelector` · `CommandPaletteTrigger`
+
+> **Decisione (risolta, 2026-05-30):** tutti i componenti sopra — incluse le leaf-card del pannello destro e `MatterSelector`/`CommandPaletteTrigger` — **entrano nella #3, ma solo in forma presentazionale e mock**. Motivo: il pannello destro è centrale per Quaero; senza Source / Excerpt / Reasoning / Genealogy almeno in forma mock, la shell sarebbe troppo vuota e poco rappresentativa. Restano **rigorosamente esclusi**: logica di dominio reale, Pratiche/Fonti reali, persistenza, backend nuovo, ingestion, AI, grafo genealogico reale. **Solo dati mock statici e UI** (vedi *Cosa resta FUORI*).
 
 ## Cosa DEVE funzionare (interazioni)
 
 - **ModeSwitcher** commuta i 5 modi (placeholder).
 - **RightContextPanel** cambia tra le 6 tab (default Sources).
-- **MatterSelector** aggiorna la label dell'header *(se incluso — vedi nota di raccordo)*.
-- **⌘K** apre/chiude un overlay stub *(se incluso)*.
+- **MatterSelector** aggiorna la label dell'header (mock: 3–4 pratiche statiche).
+- **⌘K** (`CommandPaletteTrigger`) apre/chiude un overlay stub vuoto (nessun comando reale).
 - **Toggle IT/EN** (regressione #2) e **ping** (regressione #2) restano verdi.
 
 ## Cosa resta FUORI dalla #3
@@ -62,8 +65,11 @@ apps/desktop/frontend/
 ├─ src/index.css · src/styles/  # base tipografica + @font-face self-host
 ├─ public/fonts/                # woff2 self-hosted (Newsreader/Public Sans/IBM Plex Mono)
 ├─ src/components/ui/           # primitives: Button, Panel, Badge, SearchInput, TabButton, ListRow
-├─ src/components/shell/        # AppShell, TopCommandBar, LeftSidebar, MainWorkspace,
-│                               #   RightContextPanel, SettingsBlock, ModeSwitcher, StatusStrip
+├─ src/components/shell/        # AppShell, TopCommandBar (+ MatterSelector, CommandPaletteTrigger),
+│                               #   LeftSidebar, MainWorkspace, RightContextPanel, SettingsBlock,
+│                               #   ModeSwitcher, StatusStrip
+├─ src/components/cards/        # leaf presentazionali (mock): SourceCard, ExcerptCard,
+│                               #   ReasoningStep, GenealogyPreview
 ├─ src/app/App.tsx              # compone AppShell (sostituisce il guscio minimo #2)
 ├─ src/mock/                    # array mock statici (pratiche, fonti, estratti, step, nodi)
 └─ **/*.test.tsx                # smoke test (§11)
