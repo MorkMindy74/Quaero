@@ -1,0 +1,17 @@
+{
+  "name": "quaero",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@11.5.0",
+  "scripts": {
+    "dev": "pnpm --filter @quaero/desktop dev",
+    "build": "pnpm --filter @quaero/desktop build",
+    "test": "pnpm --filter @quaero/desktop test",
+    "typecheck": "pnpm --filter @quaero/desktop typecheck",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

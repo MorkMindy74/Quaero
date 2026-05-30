@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quaero",
+  "version": "0.1.0",
+  "identifier": "app.quaero.desktop",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --filter @quaero/desktop dev",
+    "beforeBuildCommand": "pnpm --filter @quaero/desktop build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Quaero",
+        "width": 1200,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}

@@ -8,10 +8,11 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-30)
 
-- Fase: **pianificazione completata, sviluppo non ancora iniziato.**
+- Fase: **Slice #2 (scheletro app) COMPLETATA e verde.** Prossima: #3 Design / #4 Installer (HITL, con l'utente), oppure #5 Pratiche.
 - Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**.
-- Definiti: PRD, glossario di dominio, 9 ADR, 14 slice di lavoro. Nessuna riga di codice applicativo ancora scritta.
-- Unico artefatto pre-esistente: `UX/index.html` (mockup statico dell'interfaccia, fissa la visione estetica).
+- Definiti: PRD, glossario di dominio, 11 ADR, 14 slice di lavoro.
+- Implementato in #2: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima. **2 test Rust + 3 test frontend** verdi; app **avviata in dev mode e verificata** visivamente.
+- Mockup estetico di riferimento: `UX/index.html` (il design vero è la slice #3).
 
 ## Glossario core (dettaglio in [`CONTEXT.md`](CONTEXT.md))
 
@@ -69,22 +70,18 @@ Backlog glossario (non bloccante): Strategia, Connettore, Timeline, Workflow/Tas
 3. **#9 Verificatore** + **#10 Privacy guard**: i due moduli critici testati (anti-allucinazione + privacy).
 4. **#11 Redazione/DOCX** → **#15 Genealogia**; connettori **#12/#13**; **#14 Firma CNS** in coda.
 
-## Quando ripartiamo sulla #2
+## Prossima sessione
 
-1. Leggere questo file e [`docs/plans/issue-02-skeleton.md`](docs/plans/issue-02-skeleton.md).
-2. Confermare il piano della #2 — che deve rispettare anche **ADR-0010** (stack frontend) e **ADR-0011** (sicurezza Tauri, IPC tipizzato, confine `core` ↔ Tauri), oltre agli ADR 0001–0009.
-3. Solo allora iniziare, con approccio **TDD**. Comando:
+La slice **#2 è completata** (vedi *Stato attuale*). Prossime per piano:
+- **#3 Design language** + **#4 Installer** — HITL, da fare insieme all'utente.
+- **#5 Pratiche** — AFK, avvia la spina dorsale del dominio (Cliente→Pratica→Fascicolo→Fonte).
 
-```
-/mattpocock-skills:tdd 2
-```
+Per sviluppare la prossima slice (es. #5): leggere questo file, aprire la issue (`gh issue view 5 --comments`), confermare il piano, poi `/mattpocock-skills:tdd 5`.
 
-(in alternativa, aprire prima la issue con `gh issue view 2 --comments`).
-
-Prima di iniziare, verificare l'ambiente:
+**Ambiente (Windows):** i comandi `cargo` richiedono l'ambiente VS Build Tools caricato — usare la **"x64 Native Tools Command Prompt for VS 2022"** oppure caricare `vcvars64.bat` (`...\BuildTools\VC\Auxiliary\Build\vcvars64.bat`), altrimenti il linker MSVC non è nel PATH. Verifica rapida:
 
 ```
-rustc --version ; cargo --version ; node --version ; pnpm --version ; rustup show
+rustc --version ; cargo --version ; node --version ; pnpm --version
 ```
 
-Regola d'oro: **niente codice prima di aver riletto il checkpoint e confermato il piano.** La #2 non produce funzionalità, produce confini architetturali corretti.
+Regola d'oro: **niente codice prima di aver riletto il checkpoint e confermato il piano.**

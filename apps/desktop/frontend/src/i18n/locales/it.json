@@ -1,0 +1,8 @@
+{
+  "app.name": "Quaero",
+  "workspace.welcome": "Cosa vuoi cercare, analizzare o costruire oggi?",
+  "nav.workspace": "Workspace",
+  "nav.matters": "Pratiche",
+  "nav.knowledge": "Knowledge",
+  "action.ping": "Test connessione"
+}

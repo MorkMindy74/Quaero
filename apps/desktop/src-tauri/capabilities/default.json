@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability set for the skeleton: core defaults only. No filesystem, shell, http, network or clipboard (ADR-0011).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
