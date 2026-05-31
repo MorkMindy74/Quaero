@@ -8,8 +8,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8 e #9 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8 e #9 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + Verificatore citazioni. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`159f954`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8, #9 e #10 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8, #9 e #10 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + Verificatore citazioni + Privacy Guard. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`9a8d178`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
@@ -20,7 +20,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - **#7** chat controllata **stub-only offline**: pipeline UI → IPC → Rust → `ChatProvider` → `StubProvider` deterministico; **nessuna rete/API key/LLM reale/persistenza/accesso documenti/Evidence/citazioni**; isolamento per-Pratica (cambio Pratica → chat azzerata); risposte marcate "esplorativa · non verificata · senza citazioni · non parere legale" (ADR-0007). **PR #28 mergiata** (commit `3ef2557`). **Issue #7 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER isolamento per-Pratica) → fix → giro 2 `approve`.
 - **#8** **Citazioni ad Estratti** (cuore anti-allucinazione, ADR-0007): `Excerpt`/`Anchor`/`Citation` nel dominio canonico + persistenza + display read-only nella tab Estratti; invariante "si cita un Estratto, **mai** una Fonte" imposto dal tipo; `sourceSha256` validato contro `SourceRef.file.sha256`; retro-compatibile coi Workspace pre-#8. **PR #30 mergiata** (commit `6d496d8`). **Issue #8 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità `sourceSha256`) → fix → giro 2 `approve`.
 - **#9** **Verificatore citazioni** (audit & spiegabilità): `verify(&Workspace)` **puro/deterministico** in `quaero-core::verify` → report **derivato** in `WorkspaceView` (mai persistito; `Workspace` canonico invariato); findings `Info`/`Warning` (niente `Error`) — `OrphanExcerpt`, `UnpinnedDocumentExcerpt` (solo con `StoredFile`), `UncitedSource` (Info, non degrada il verdetto); attestazione positiva (conteggi); tab **"Verifica"** read-only; verdetto `warnings==0` → "Catena coerente". **PR #32 mergiata** (commit `159f954`). **Issue #9 CHIUSA.** Review Codex leggera: giro 1 `changes-requested` (SHOULD FIX perf) → fix O(1) a comportamento invariato → verde.
-- Test su `main`: **102 Rust** (66 unit core + 8 integration + 28 store desktop) + **42 frontend**; CI verde.
+- **#10** **Privacy Guard** (cintura trasversale, posata **prima** di aprire le porte rischiose): `quaero-core::privacy` puro — `PrivacyPolicy::evaluate(&EgressRequest) -> Decision` reale/deterministico con **default-deny** (`ClientConfidential`/`UserContent` → destinazioni non locali = `Denied`; `NonSensitive`→remoto = `Allowed`; locali sempre `Allowed`); riga privacy read-only nello `StatusStrip`. **Nessun egress reale introdotto.** **PR #34 mergiata** (commit `9a8d178`). **Issue #10 CHIUSA.** Review Codex leggera: `approve`.
+- Test su `main`: **108 Rust** (72 unit core + 8 integration + 28 store desktop) + **43 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -129,6 +130,22 @@ Audit **puro e derivato** della catena Estratto→Citazione (`quaero-core::verif
 
 *(Consolidato dopo review avversariale Codex leggera: SHOULD FIX performance — lookup O(excerpts×sources) — risolto con set precomputato O(1) a comportamento invariato; verdetto finale verde.)*
 
+## Privacy Guard (#10, consolidato)
+
+Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischiose (provider reale, OSINT, export, parsing, byte). Definisce **contratto + default**, non un egress runtime (oggi nulla esce). **PR #34 mergiata** (commit `9a8d178`).
+
+- **`quaero-core::privacy`** puro: `DataClass` (`ClientConfidential`/`UserContent`/`NonSensitive`); `Destination` (`LocalModel`/`LocalPersistence`/`InAppDisplay` = locali; `RemoteModel`/`ExternalConnector` = non locali) + `is_local`.
+- **`PrivacyPolicy::evaluate(&EgressRequest) -> Decision`** — **reale, puro, deterministico** (non stub): locale sempre `Allowed`; verso non-locale solo `NonSensitive` passa, `ClientConfidential`/`UserContent` → `Denied(reason)` (**default-deny**).
+- v1: **nessuna persistenza/consenso/redazione PII**; `PrivacyPolicy` è il **seam** per il futuro consenso.
+- **UI**: riga read-only nello `StatusStrip` ("Privacy: locale · nessun dato esce dal dispositivo"), **vera** per la build attuale.
+- **Niente enforcement finto / niente UI ingannevole**: `evaluate` è testata ma non ancora invocata **solo perché non esiste egress**.
+
+**Vincolo per le slice future (vincolante):** ogni **egress reale** (provider LLM, OSINT, export, log di rete) **deve** passare da `PrivacyPolicy::evaluate`, e la riga posture dovrà diventare **derivata/condizionale**, non statica. Le Codex review di quelle slice lo verificheranno.
+
+**Fuori da #10**: consenso persistito, redazione PII, API key/segreti, provider reale, OSINT, export, rete, accesso byte/FS.
+
+*(Consolidato dopo review avversariale Codex leggera: `approve`, nessun material finding.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -160,7 +177,7 @@ Audit **puro e derivato** della catena Estratto→Citazione (`quaero-core::verif
 | #7  | ✅ **CHIUSA** — Chat che risponde (senza citazioni): pipeline UI→IPC→Rust→ChatProvider→StubProvider offline; isolamento per-Pratica. Provider reale = slice futura | AFK | #6 |
 | #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione UI + clic→evidenzia = #8B futura | AFK | #7 |
 | #9  | ✅ **CHIUSA** — Verificatore citazioni: `verify(&Workspace)` puro + report derivato in `WorkspaceView` + tab "Verifica" read-only; `UncitedSource` Info non degrada il verdetto. Re-hash fisico = slice futura | AFK | #8 |
-| #10 | Privacy guard | AFK | #8 |
+| #10 | ✅ **CHIUSA** — Privacy guard: contratto `quaero-core::privacy` + `PrivacyPolicy::evaluate` default-deny + riga `StatusStrip`. Enforcement su egress reale = slice future | AFK | #8 |
 | #11 | Valuta clausola + Bozza + export DOCX | AFK | #8 |
 | #12 | Connettore Normattiva | AFK | #10 |
 | #13 | Connettore giurisprudenza | AFK | #12 |
@@ -176,9 +193,9 @@ Audit **puro e derivato** della catena Estratto→Citazione (`quaero-core::verif
 
 ## Prossima sessione
 
-**#2, #3, l'intera #5, #6, #7, #8 e #9 completate e mergiate; issue #5, #6, #7, #8 e #9 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1 con `sha256`), chat stub-only offline, catena anti-allucinazione Estratto→Citazione **modellata, validata e auditata** (Verificatore). Prossimo step da decidere insieme.
+**#2, #3, l'intera #5, #6, #7, #8, #9 e #10 completate e mergiate; issue #5, #6, #7, #8, #9 e #10 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata**, e **Privacy Guard** (cintura privacy) in casa. Prossimo step da decidere insieme.
 
-Candidati naturali: **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale del documento); **#10** (Privacy guard); oppure le slice di rinforzo — **provider LLM reale** dietro `ChatProvider` (preflight + Codex obbligatoria), **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
+Candidati naturali: **provider LLM reale** dietro `ChatProvider` **+ Privacy Guard** (preflight + Codex **obbligatoria** — sarebbe il **primo egress reale**, deve passare dal Guard e rendere derivata la posture line); **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#11** (Valuta clausola + Bozza + export DOCX); oppure le slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
