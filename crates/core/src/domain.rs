@@ -4,6 +4,13 @@
 //! VIEW** over sources — not a physical folder (ADR-0008): a source may appear
 //! in many dossiers (many-to-many). `SourceRef` is a **minimal citable
 //! reference**, NOT yet a full Fonte with Estratto/Ancora (those come later).
+//!
+//! Canonical vs derived boundary (post adversarial review):
+//! - [`Workspace`] is the **canonical / persistable** contract: it stores only
+//!   `sources` and user-curated **manual** dossiers.
+//! - **Dynamic** dossiers are **derived** from `sources` by [`dynamic_dossiers`]
+//!   and only ever live inside a [`WorkspaceView`] (computed for the UI). They
+//!   are never persisted as canonical state, so they cannot go stale.
 
 use serde::{Deserialize, Serialize};
 
@@ -143,6 +150,7 @@ impl DossierView {
 
 /// Generate one **Dynamic** Fascicolo per `SourceType` actually present, in the
 /// stable order of [`SourceType::all`]. Types with no sources produce nothing.
+/// This is a pure derivation from `sources` — never persisted as canonical state.
 pub fn dynamic_dossiers(sources: &[SourceRef]) -> Vec<DossierView> {
     SourceType::all()
         .into_iter()
@@ -166,6 +174,14 @@ pub fn dynamic_dossiers(sources: &[SourceRef]) -> Vec<DossierView> {
         .collect()
 }
 
+/// All Fascicolo views for rendering: derived **dynamic** dossiers (from the
+/// current `sources`) followed by the canonical **manual** ones.
+pub fn all_dossier_views(sources: &[SourceRef], manual: &[DossierView]) -> Vec<DossierView> {
+    let mut views = dynamic_dossiers(sources);
+    views.extend(manual.iter().cloned());
+    views
+}
+
 /// All dossiers that contain a given source — demonstrates the many-to-many
 /// relation: the same Fonte can be viewed from several Fascicoli.
 pub fn dossiers_for_source<'a>(
@@ -178,17 +194,45 @@ pub fn dossiers_for_source<'a>(
         .collect()
 }
 
-/// A whole matter context: client, matter, its sources, and its dossiers
-/// (dynamic by type + manual). Pure, presentational seed for the UI.
+/// **Canonical / persistable** matter state. Holds only canonical data: the
+/// matter's sources and the user-curated **manual** dossiers. Dynamic dossiers
+/// are NOT stored here — they are derived on demand (see [`Workspace::view`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workspace {
+    pub client: Client,
+    pub matter: Matter,
+    pub sources: Vec<SourceRef>,
+    pub manual_dossiers: Vec<DossierView>,
+}
+
+impl Workspace {
+    /// Derive the read/render view (dynamic dossiers + manual). The view is
+    /// always recomputed from the current `sources`, so it cannot go stale.
+    pub fn view(&self) -> WorkspaceView {
+        WorkspaceView {
+            client: self.client.clone(),
+            matter: self.matter.clone(),
+            sources: self.sources.clone(),
+            dossiers: all_dossier_views(&self.sources, &self.manual_dossiers),
+        }
+    }
+}
+
+/// A **derived, non-canonical** view of a [`Workspace`] for the UI. Combines
+/// computed dynamic dossiers with the manual ones. This is NOT a persistence
+/// schema; it is recomputed from canonical state and may be serialized only to
+/// hand the already-derived result to the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceView {
     pub client: Client,
     pub matter: Matter,
     pub sources: Vec<SourceRef>,
     pub dossiers: Vec<DossierView>,
 }
 
-/// Deterministic sample workspace (fixed ids, no random, no current date).
+/// Deterministic sample canonical workspace (fixed ids, no random, no current
+/// date). Contains sources + a manual dossier only; dynamic dossiers are derived
+/// via [`Workspace::view`].
 pub fn sample_workspace() -> Workspace {
     let client = Client {
         id: ClientId::new("alfa"),
@@ -226,21 +270,19 @@ pub fn sample_workspace() -> Workspace {
             meta: String::new(),
         },
     ];
-
-    let mut dossiers = dynamic_dossiers(&sources);
-    // A manual Fascicolo curated by the user — sources here ALSO remain in their
-    // dynamic dossiers (many-to-many, no duplication).
-    dossiers.push(DossierView::manual(
+    // A manual Fascicolo curated by the user. Its sources ALSO appear in their
+    // derived dynamic dossiers (many-to-many, no duplication of canonical data).
+    let manual_dossiers = vec![DossierView::manual(
         "man-produzione-avversaria",
         "Produzione avversaria",
         vec![SourceId::new("s1"), SourceId::new("s3")],
-    ));
+    )];
 
     Workspace {
         client,
         matter,
         sources,
-        dossiers,
+        manual_dossiers,
     }
 }
 
@@ -287,52 +329,98 @@ mod tests {
     }
 
     #[test]
-    fn a_source_can_belong_to_many_dossiers() {
+    fn view_combines_derived_dynamic_and_canonical_manual() {
+        let view = sample_workspace().view();
+        // dynamic dossiers are present (derived)…
+        assert!(view
+            .dossiers
+            .iter()
+            .any(|d| d.kind == DossierKind::Dynamic && d.name == "Documenti"));
+        // …and the manual one is present too.
+        assert!(view
+            .dossiers
+            .iter()
+            .any(|d| d.kind == DossierKind::Manual && d.name == "Produzione avversaria"));
+    }
+
+    #[test]
+    fn manual_dossiers_are_canonical_and_only_manual() {
         let ws = sample_workspace();
+        assert!(!ws.manual_dossiers.is_empty());
+        assert!(ws
+            .manual_dossiers
+            .iter()
+            .all(|d| d.kind == DossierKind::Manual));
+    }
+
+    #[test]
+    fn a_source_can_belong_to_dynamic_and_manual() {
+        let view = sample_workspace().view();
         let s1 = SourceId::new("s1");
-        let views = dossiers_for_source(&s1, &ws.dossiers);
-        // s1 is in its dynamic "Documenti" dossier AND in the manual one.
+        let views = dossiers_for_source(&s1, &view.dossiers);
         assert!(views.len() >= 2);
         assert!(views.iter().any(|d| d.kind == DossierKind::Dynamic));
         assert!(views.iter().any(|d| d.kind == DossierKind::Manual));
     }
 
     #[test]
-    fn dynamic_and_manual_are_distinguishable() {
-        let ws = sample_workspace();
-        assert!(ws.dossiers.iter().any(|d| d.kind == DossierKind::Dynamic));
-        let manual = ws
-            .dossiers
-            .iter()
-            .find(|d| d.kind == DossierKind::Manual)
-            .unwrap();
-        assert_eq!(manual.name, "Produzione avversaria");
+    fn changing_source_type_refreshes_dynamic_view_without_staleness() {
+        let mut ws = sample_workspace();
+        // Reclassify s1 from Documento to Norma. s1 was the only Documento.
+        ws.sources
+            .iter_mut()
+            .find(|s| s.id == SourceId::new("s1"))
+            .unwrap()
+            .kind = SourceType::Norma;
+
+        let view = ws.view();
+        // The "Documenti" dynamic dossier disappears — no stale membership.
+        assert!(!view.dossiers.iter().any(|d| d.name == "Documenti"));
+        // s1 is now grouped under "Norme".
+        let norme = view.dossiers.iter().find(|d| d.name == "Norme").unwrap();
+        assert!(norme.sources.contains(&SourceId::new("s1")));
     }
 
     #[test]
-    fn sample_workspace_is_coherent() {
+    fn canonical_contract_does_not_persist_dynamic_dossiers() {
         let ws = sample_workspace();
-        assert_eq!(ws.matter.client, ws.client.id);
-        // every source id referenced by a dossier exists in the workspace sources.
-        let known: Vec<&SourceId> = ws.sources.iter().map(|s| &s.id).collect();
-        for dossier in &ws.dossiers {
+        let json = serde_json::to_string(&ws).unwrap();
+        // The canonical Workspace serializes manual dossiers only.
+        assert!(json.contains("\"Manual\""));
+        assert!(json.contains("Produzione avversaria"));
+        assert!(!json.contains("\"Dynamic\""));
+        assert!(!json.contains("dyn-"));
+    }
+
+    #[test]
+    fn workspace_view_carries_dynamic_dossiers_when_serialized() {
+        let view = sample_workspace().view();
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(json.contains("\"Dynamic\""));
+        assert!(json.contains("Documenti"));
+    }
+
+    #[test]
+    fn sample_workspace_is_deterministic_and_coherent() {
+        let a = sample_workspace();
+        let b = sample_workspace();
+        assert_eq!(a, b);
+        assert_eq!(a.matter.client, a.client.id);
+        // every source referenced by a manual dossier exists in the sources.
+        let known: Vec<&SourceId> = a.sources.iter().map(|s| &s.id).collect();
+        for dossier in &a.manual_dossiers {
             for sid in &dossier.sources {
-                assert!(
-                    known.contains(&sid),
-                    "unknown source id in dossier {}",
-                    dossier.id
-                );
+                assert!(known.contains(&sid), "unknown source id in {}", dossier.id);
             }
         }
     }
 
     #[test]
-    fn workspace_survives_serde_round_trip() {
+    fn canonical_workspace_survives_serde_round_trip() {
         let ws = sample_workspace();
         let json = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(ws, back);
-        // newtype ids serialize transparently as bare strings.
         assert!(json.contains("\"rossi-bianchi\""));
     }
 }

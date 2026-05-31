@@ -1,6 +1,6 @@
 // Static mock data for the #3 shell. No domain logic, no persistence, no backend.
 // These are presentational fixtures only (Screen Spec v0.2).
-import type { Workspace } from "../domain/types";
+import type { WorkspaceView } from "../domain/types";
 
 export interface MockMatter {
   id: string;
@@ -107,10 +107,10 @@ export const normativeGenealogy: MockNormativeGenealogy = {
   linkedSources: ["Art. 1175 c.c.", "Cass. civ. 12345/2024"],
 };
 
-// Typed workspace mirroring `quaero_core::domain::sample_workspace()` exactly
-// (same deterministic data + dossiers). The grouping logic is tested in Rust;
-// here the result is static (no domain logic in the frontend).
-export const workspace: Workspace = {
+// Derived view mirroring `quaero_core::domain::sample_workspace().view()`
+// (dynamic dossiers + manual). The derivation logic is tested in Rust; here the
+// already-derived result is static (no domain logic in the frontend).
+export const workspaceView: WorkspaceView = {
   client: { id: "alfa", name: "Alfa S.r.l." },
   matter: {
     id: "rossi-bianchi",

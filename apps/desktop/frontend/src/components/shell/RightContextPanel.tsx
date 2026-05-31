@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { TabButton } from "../ui";
 import { SourceCard, ExcerptCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import {
-  workspace,
+  workspaceView,
   excerpts,
   reasoningSteps,
   genealogyNodes,
@@ -20,7 +20,7 @@ const GROUPS: { label: string; tabs: TabId[] }[] = [
 ];
 
 const COUNTS: Partial<Record<TabId, number>> = {
-  sources: workspace.sources.length,
+  sources: workspaceView.sources.length,
   excerpts: excerpts.length,
   reasoning: reasoningSteps.length,
   memory: memoryItems.length,
@@ -31,7 +31,7 @@ const COUNTS: Partial<Record<TabId, number>> = {
 // dynamic dossiers (by SourceType) + a manual one. Demonstrates the domain model
 // (Cliente → Pratica → Fascicolo/vista → Fonte) with many-to-many membership.
 function SourcesTab({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const { client, matter, sources, dossiers } = workspace;
+  const { client, matter, sources, dossiers } = workspaceView;
   const findSource = (id: string) => sources.find((s) => s.id === id);
   const dynamic = dossiers.filter((d) => d.kind === "Dynamic");
   const manual = dossiers.filter((d) => d.kind === "Manual");

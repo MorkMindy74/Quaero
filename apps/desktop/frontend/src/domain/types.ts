@@ -43,7 +43,18 @@ export interface DossierView {
   sources: string[];
 }
 
+/** Canonical / persistable state: sources + user-curated manual dossiers only.
+ *  Dynamic dossiers are NOT stored here — they are derived (see WorkspaceView). */
 export interface Workspace {
+  client: Client;
+  matter: Matter;
+  sources: SourceRef[];
+  manualDossiers: DossierView[];
+}
+
+/** Derived, non-canonical view for the UI: dynamic (computed) + manual dossiers.
+ *  Mirrors `quaero_core::domain::WorkspaceView`. */
+export interface WorkspaceView {
   client: Client;
   matter: Matter;
   sources: SourceRef[];
