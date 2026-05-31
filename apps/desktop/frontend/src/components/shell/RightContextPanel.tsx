@@ -15,14 +15,75 @@ import {
   type Excerpt,
   type Citation,
   type SourceRef,
+  type VerificationReport,
+  type Finding,
 } from "../../domain/types";
 
-type TabId = "sources" | "excerpts" | "reasoning" | "memory" | "genealogy" | "agent";
+type TabId =
+  | "sources"
+  | "excerpts"
+  | "reasoning"
+  | "verify"
+  | "memory"
+  | "genealogy"
+  | "agent";
 
 const GROUPS: { label: string; tabs: TabId[] }[] = [
   { label: "tabs.groupEvidence", tabs: ["sources", "excerpts", "reasoning"] },
-  { label: "tabs.groupContext", tabs: ["memory", "genealogy", "agent"] },
+  { label: "tabs.groupContext", tabs: ["verify", "memory", "genealogy", "agent"] },
 ];
+
+// Verifica tab (#9): read-only audit of the Estratto→Citazione chain, separate
+// from Evidence (Estratti). Shows a positive verdict + summary counts and the
+// findings (Warnings full-weight, Info lower-weight). No mock fallback.
+function VerifyTab({ report }: { report?: VerificationReport }) {
+  const { t } = useTranslation();
+  if (!report) {
+    return <p className="text-sm text-muted">{t("verify.empty")}</p>;
+  }
+  const { summary, findings } = report;
+  const warnings = findings.filter((f) => f.severity === "Warning");
+  const infos = findings.filter((f) => f.severity === "Info");
+  const ref = (f: Finding) => f.excerptId ?? f.sourceId ?? f.citationId;
+  return (
+    <div className="space-y-3">
+      <div
+        className={`rounded border px-3 py-2 ${
+          summary.warnings === 0 ? "border-hairline bg-panel" : "border-accent-warning bg-panel"
+        }`}
+      >
+        <div className="text-sm font-medium">
+          {summary.warnings === 0
+            ? t("verify.coherent")
+            : t("verify.withWarnings", { count: summary.warnings })}
+        </div>
+        <div className="mt-1 font-mono text-[11px] text-muted">
+          {t("verify.summary", {
+            citations: summary.citations,
+            excerpts: summary.excerpts,
+            documentBacked: summary.documentBackedExcerpts,
+            pinned: summary.pinnedExcerpts,
+          })}
+        </div>
+      </div>
+
+      {warnings.map((f, i) => (
+        <div key={`w${i}`} className="text-sm text-accent-warning">
+          <span className="font-mono text-[10px] uppercase">{t(`verify.severity.${f.severity}`)}</span>{" "}
+          {t(`verify.code.${f.code}`)}
+          {ref(f) ? <span className="font-mono text-muted"> · {ref(f)}</span> : null}
+        </div>
+      ))}
+      {infos.map((f, i) => (
+        <div key={`i${i}`} className="text-xs text-muted opacity-80">
+          <span className="font-mono text-[10px] uppercase">{t(`verify.severity.${f.severity}`)}</span>{" "}
+          {t(`verify.code.${f.code}`)}
+          {ref(f) ? <span> · {ref(f)}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // Counts for the static (#3 mock) tabs; sources and excerpts counts are derived
 // from the active workspace at render time.
@@ -185,13 +246,19 @@ export function RightContextPanel({
   const [selected, setSelected] = useState<string | null>(null);
 
   const view = workspace ?? workspaceView;
-  // #8: Estratti/Citazioni come ONLY from a real open workspace — no mock fallback.
+  // #8/#9: Estratti/Citazioni/Verifica come ONLY from a real open workspace.
   const realExcerpts = workspace?.excerpts ?? [];
   const realCitations = workspace?.citations ?? [];
+  const realVerification = workspace?.verification;
   const counts: Partial<Record<TabId, number>> = {
     ...STATIC_COUNTS,
     sources: view.sources.length,
     excerpts: realExcerpts.length,
+    // badge only when there are warnings (no "0" noise)
+    verify:
+      realVerification && realVerification.summary.warnings > 0
+        ? realVerification.summary.warnings
+        : undefined,
   };
 
   return (
@@ -239,6 +306,7 @@ export function RightContextPanel({
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}
+        {tab === "verify" && <VerifyTab report={realVerification} />}
         {tab === "memory" &&
           memoryItems.map((item) => (
             <div key={item.id} className="rounded border border-hairline bg-panel p-3 text-sm">

@@ -101,8 +101,35 @@ export interface Workspace {
   citations?: Citation[];
 }
 
+/** Citation-chain audit (#9). Mirrors `quaero_core::verify`. */
+export type Severity = "Info" | "Warning";
+export type VerificationCode = "OrphanExcerpt" | "UnpinnedDocumentExcerpt" | "UncitedSource";
+
+export interface Finding {
+  severity: Severity;
+  code: VerificationCode;
+  excerptId?: string;
+  sourceId?: string;
+  citationId?: string;
+}
+
+export interface VerificationSummary {
+  citations: number;
+  excerpts: number;
+  documentBackedExcerpts: number;
+  pinnedExcerpts: number;
+  warnings: number;
+  infos: number;
+}
+
+export interface VerificationReport {
+  summary: VerificationSummary;
+  findings: Finding[];
+}
+
 /** Derived, non-canonical view for the UI: dynamic (computed) + manual dossiers,
- *  plus the canonical excerpts/citations. Mirrors `quaero_core::domain::WorkspaceView`. */
+ *  the canonical excerpts/citations, and the derived citation-chain audit (#9).
+ *  Mirrors `quaero_core::domain::WorkspaceView`. */
 export interface WorkspaceView {
   client: Client;
   matter: Matter;
@@ -110,6 +137,7 @@ export interface WorkspaceView {
   dossiers: DossierView[];
   excerpts: Excerpt[];
   citations: Citation[];
+  verification?: VerificationReport;
 }
 
 /** Display label for a source type (presentational only). */
