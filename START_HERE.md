@@ -8,8 +8,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6 e #7 COMPLETATE e mergiate in `main`.** Le **issue #5, #6 e #7 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`3ef2557`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7 e #8 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7 e #8 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni). Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`6d496d8`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
@@ -18,7 +18,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - **Issue #5 CHIUSA**: completata end-to-end con **#5A** (dominio canonico) + **#5B** (persistenza) + **#5C** (UI wiring). L'unificazione mock↔reale di TopCommandBar/MainWorkspace resta un **refinement UI futuro**, non parte dello scope di #5.
 - **#6** ingestione documenti / Evidence v1: import di un file locale come **Fonte Documento**, byte in `app_data/files/<matterId>/`, registrazione canonica **`SourceRef + StoredFile`** (`storedName`/`originalName`/`byteLen`/`sha256`), byte **fuori** dal JSON, pubblicazione blob **esclusiva** (no overwrite), path safety, UI minima. **PR #26 mergiata** (commit `0d83ee5`). **Issue #6 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità blob) → fix → giro 2 `approve-with-notes` (nessun BLOCKER/SHOULD FIX residuo).
 - **#7** chat controllata **stub-only offline**: pipeline UI → IPC → Rust → `ChatProvider` → `StubProvider` deterministico; **nessuna rete/API key/LLM reale/persistenza/accesso documenti/Evidence/citazioni**; isolamento per-Pratica (cambio Pratica → chat azzerata); risposte marcate "esplorativa · non verificata · senza citazioni · non parere legale" (ADR-0007). **PR #28 mergiata** (commit `3ef2557`). **Issue #7 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER isolamento per-Pratica) → fix → giro 2 `approve`.
-- Test su `main`: **80 Rust** (44 unit core + 8 integration + 28 store desktop) + **39 frontend**; CI verde.
+- **#8** **Citazioni ad Estratti** (cuore anti-allucinazione, ADR-0007): `Excerpt`/`Anchor`/`Citation` nel dominio canonico + persistenza + display read-only nella tab Estratti; invariante "si cita un Estratto, **mai** una Fonte" imposto dal tipo; `sourceSha256` validato contro `SourceRef.file.sha256`; retro-compatibile coi Workspace pre-#8. **PR #30 mergiata** (commit `6d496d8`). **Issue #8 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità `sourceSha256`) → fix → giro 2 `approve`.
+- Test su `main`: **95 Rust** (59 unit core + 8 integration + 28 store desktop) + **40 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -95,6 +96,22 @@ La chat vive nella surface "Conversazione" via pipeline **UI → IPC → Rust �
 
 *(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER isolamento per-Pratica risolto con remount keyato per `matter.id`; verdetto finale `approve`.)*
 
+## Citazioni ad Estratti (#8, consolidato)
+
+Il cuore anti-allucinazione (ADR-0007) nel dominio canonico (`quaero-core::domain`). **PR #30 mergiata** (commit `6d496d8`).
+
+- **`Excerpt { id, sourceId, anchor, quote, sourceSha256? }`** — porzione verificabile di una Fonte; valido-per-costruzione (campi privati, `new`/`RawExcerpt` `TryFrom`; rifiuta quote/anchor vuoti).
+- **`Anchor { kind, value }`** — localizzatore logico indipendente dal layout (dichiarativo in #8; **nessun parsing**).
+- **`Citation { id, claim, excerptId }`** — referenzia **solo** un Estratto: **impossibile citare una Fonte** (ADR-0007 imposto dal tipo; `deny_unknown_fields` rifiuta un `sourceId` intrufolato).
+- **Integrità referenziale** in `Workspace::assemble` (su `new_with_evidence` e serde `TryFrom`): excerpt→source esistente, citation→excerpt esistente, id univoci.
+- **Integrità Evidence**: se un Estratto pinna `sourceSha256`, deve combaciare **esattamente** con `SourceRef.file.sha256`; rifiutati mismatch e pin su Fonte senza file; `None` ammesso.
+- **Retro-compatibilità**: `serde(default)` sui nuovi campi (Workspace pre-#8 caricabili); `skip_serializing_if` → JSON senza evidenze byte-identico.
+- **UI**: tab "Estratti" mostra gli Estratti **reali** del workspace aperto (quote + Ancora + Fonte + claim citanti), stato vuoto chiaro, **nessun fallback mock**.
+
+**Fuori da #8** (slice futura, es. #8B): creazione Estratti da UI, **clic→evidenzia** nel documento, parsing reale (PDF/DOCX), estrazione automatica / grounding con LLM reale.
+
+*(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER integrità `sourceSha256` — pin non validato — risolto con validazione contro il digest della Fonte; verdetto finale `approve`.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -124,7 +141,7 @@ La chat vive nella surface "Conversazione" via pipeline **UI → IPC → Rust �
 | #5  | ✅ **CHIUSA** — Pratiche (Cliente→Pratica→Fascicolo): #5A dominio + #5B persistenza + #5C UI wiring (create/open/search). Unificazione mock↔reale = refinement UI futuro | AFK | #2, #3 |
 | #6  | ✅ **CHIUSA** — Allega & ingerisci documento + Evidence (import→Fonte Documento + `sha256`; byte fuori JSON; pubblicazione esclusiva). Chunked import = slice futura | AFK | #5 |
 | #7  | ✅ **CHIUSA** — Chat che risponde (senza citazioni): pipeline UI→IPC→Rust→ChatProvider→StubProvider offline; isolamento per-Pratica. Provider reale = slice futura | AFK | #6 |
-| #8  | Citazioni ad Estratti + clic→evidenzia | AFK | #7 |
+| #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione UI + clic→evidenzia = #8B futura | AFK | #7 |
 | #9  | Verificatore citazioni | AFK | #8 |
 | #10 | Privacy guard | AFK | #8 |
 | #11 | Valuta clausola + Bozza + export DOCX | AFK | #8 |
@@ -142,9 +159,9 @@ La chat vive nella surface "Conversazione" via pipeline **UI → IPC → Rust �
 
 ## Prossima sessione
 
-**#2, #3, l'intera #5, #6 e #7 completate e mergiate; issue #5, #6 e #7 CHIUSE.** Pratiche operative end-to-end, documenti importati come Fonti (Evidence v1 con `sha256`), chat controllata stub-only offline. Prossimo step da decidere insieme.
+**#2, #3, l'intera #5, #6, #7 e #8 completate e mergiate; issue #5, #6, #7 e #8 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1 con `sha256`), chat stub-only offline, e la catena anti-allucinazione Estratto→Citazione modellata e validata nel dominio canonico. Prossimo step da decidere insieme.
 
-Candidati naturali: **#8** (Citazioni ad Estratti + clic→evidenzia) — il cuore anti-allucinazione, che sblocca #9 (Verificatore) e #11 (Redazione); oppure le slice di rinforzo — **provider LLM reale** dietro `ChatProvider` (preflight + Codex obbligatoria), **`chunked document import`** (robustezza payload IPC), **UI refinement** mock↔reale. Restano anche **#4 Installer** (HITL) e #9→#15.
+Candidati naturali: **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale del documento); **#9** (Verificatore citazioni); oppure le slice di rinforzo — **provider LLM reale** dietro `ChatProvider` (preflight + Codex obbligatoria), **`chunked document import`** (robustezza payload IPC), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
