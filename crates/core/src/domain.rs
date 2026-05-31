@@ -529,6 +529,10 @@ pub enum WorkspaceError {
     DuplicateCitationId(String),
     /// A citation references an excerpt id absent from `excerpts`.
     DanglingCitationExcerpt { citation: String, excerpt: String },
+    /// An excerpt pins a `sourceSha256` but the referenced source has no file.
+    ExcerptShaWithoutFile { excerpt: String, source: String },
+    /// An excerpt's `sourceSha256` does not match the referenced file's digest.
+    ExcerptShaMismatch { excerpt: String, source: String },
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -556,6 +560,14 @@ impl std::fmt::Display for WorkspaceError {
                     "citation {citation} references unknown excerpt {excerpt}"
                 )
             }
+            WorkspaceError::ExcerptShaWithoutFile { excerpt, source } => write!(
+                f,
+                "excerpt {excerpt} pins a sha256 but source {source} has no stored file"
+            ),
+            WorkspaceError::ExcerptShaMismatch { excerpt, source } => write!(
+                f,
+                "excerpt {excerpt} sha256 does not match the stored file of source {source}"
+            ),
         }
     }
 }
@@ -662,17 +674,41 @@ impl Workspace {
             }
         }
 
-        // #8: excerpts must reference an existing source; ids unique.
+        // #8: excerpts must reference an existing source; ids unique. If an
+        // excerpt pins a `sourceSha256`, it must match the referenced source's
+        // StoredFile digest exactly (Evidence integrity) — a pin on a fileless
+        // source, or a mismatching digest, is rejected. Runs on both the public
+        // constructor and the serde `TryFrom` path (no deserialization bypass).
         let mut seen_excerpts = std::collections::HashSet::new();
         for excerpt in &excerpts {
             if !seen_excerpts.insert(excerpt.id()) {
                 return Err(WorkspaceError::DuplicateExcerptId(excerpt.id().0.clone()));
             }
-            if !seen_sources.contains(&excerpt.source_id) {
-                return Err(WorkspaceError::DanglingExcerptSource {
-                    excerpt: excerpt.id().0.clone(),
-                    source: excerpt.source_id.0.clone(),
-                });
+            let source = match sources.iter().find(|s| &s.id == excerpt.source_id()) {
+                Some(source) => source,
+                None => {
+                    return Err(WorkspaceError::DanglingExcerptSource {
+                        excerpt: excerpt.id().0.clone(),
+                        source: excerpt.source_id().0.clone(),
+                    });
+                }
+            };
+            if let Some(sha) = excerpt.source_sha256() {
+                match source.file.as_ref() {
+                    None => {
+                        return Err(WorkspaceError::ExcerptShaWithoutFile {
+                            excerpt: excerpt.id().0.clone(),
+                            source: excerpt.source_id().0.clone(),
+                        });
+                    }
+                    Some(file) if file.sha256 != sha => {
+                        return Err(WorkspaceError::ExcerptShaMismatch {
+                            excerpt: excerpt.id().0.clone(),
+                            source: excerpt.source_id().0.clone(),
+                        });
+                    }
+                    Some(_) => {}
+                }
             }
         }
 
@@ -1501,6 +1537,112 @@ mod tests {
         .unwrap();
         let json = serde_json::to_string(&no_sha).unwrap();
         assert!(!json.contains("sourceSha256"));
+    }
+
+    fn doc_with_file(id: &str, sha: &str) -> SourceRef {
+        SourceRef {
+            id: SourceId::new(id),
+            kind: SourceType::Documento,
+            title: "C.pdf".to_string(),
+            meta: String::new(),
+            file: Some(StoredFile {
+                stored_name: format!("{id}.pdf"),
+                original_name: "C.pdf".to_string(),
+                byte_len: 3,
+                sha256: sha.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn excerpt_sha_matching_the_source_file_is_accepted() {
+        let sha = "ab".repeat(32);
+        let ex = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("k", "v"),
+            "q",
+            Some(sha.clone()),
+        )
+        .unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![doc_with_file("s1", &sha)],
+            vec![],
+            vec![ex],
+            vec![],
+        );
+        assert!(ws.is_ok());
+    }
+
+    #[test]
+    fn excerpt_sha_mismatch_is_rejected() {
+        let ex = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("k", "v"),
+            "q",
+            Some("cd".repeat(32)),
+        )
+        .unwrap();
+        let r = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![doc_with_file("s1", &"ab".repeat(32))],
+            vec![],
+            vec![ex],
+            vec![],
+        );
+        assert!(matches!(r, Err(WorkspaceError::ExcerptShaMismatch { .. })));
+    }
+
+    #[test]
+    fn excerpt_sha_on_a_source_without_file_is_rejected() {
+        let ex = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("k", "v"),
+            "q",
+            Some("ab".repeat(32)),
+        )
+        .unwrap();
+        // s1 is a Norma without a StoredFile → a sha pin is meaningless
+        let r = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src("s1", SourceType::Norma)],
+            vec![],
+            vec![ex],
+            vec![],
+        );
+        assert!(matches!(
+            r,
+            Err(WorkspaceError::ExcerptShaWithoutFile { .. })
+        ));
+    }
+
+    #[test]
+    fn loaded_excerpt_with_mismatching_sha_is_rejected_via_serde() {
+        // serde/RawWorkspace path must enforce the same sha integrity check.
+        let json = r#"{
+            "client":{"id":"a","name":"A"},
+            "matter":{"id":"m","client":"a","title":"t","subject":"s"},
+            "sources":[{"id":"s1","kind":"Documento","title":"t","meta":"","file":{"storedName":"s1.pdf","originalName":"C.pdf","byteLen":3,"sha256":"aaaa"}}],
+            "manualDossiers":[],
+            "excerpts":[{"id":"e1","sourceId":"s1","anchor":{"kind":"k","value":"v"},"quote":"q","sourceSha256":"bbbb"}]
+        }"#;
+        assert!(serde_json::from_str::<Workspace>(json).is_err());
+
+        // matching sha loads fine
+        let ok = r#"{
+            "client":{"id":"a","name":"A"},
+            "matter":{"id":"m","client":"a","title":"t","subject":"s"},
+            "sources":[{"id":"s1","kind":"Documento","title":"t","meta":"","file":{"storedName":"s1.pdf","originalName":"C.pdf","byteLen":3,"sha256":"aaaa"}}],
+            "manualDossiers":[],
+            "excerpts":[{"id":"e1","sourceId":"s1","anchor":{"kind":"k","value":"v"},"quote":"q","sourceSha256":"aaaa"}]
+        }"#;
+        assert!(serde_json::from_str::<Workspace>(ok).is_ok());
     }
 
     #[test]
