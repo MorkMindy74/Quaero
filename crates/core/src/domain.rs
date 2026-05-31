@@ -288,21 +288,118 @@ pub fn dossiers_for_source<'a>(
         .collect()
 }
 
-/// **Canonical / persistable** matter state. Holds only canonical data: the
-/// matter's sources and the user-curated **manual** dossiers. Dynamic dossiers
-/// are NOT stored here — they are derived on demand (see [`Workspace::view`]).
-/// `deny_unknown_fields` rejects shadow/derived fields (e.g. a top-level
-/// `dossiers`) so a saved `WorkspaceView` cannot pass as canonical state.
+/// Why a [`Workspace`] is not a valid canonical document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceError {
+    /// `matter.client` does not point at `client.id`.
+    ClientMismatch,
+    /// Two sources share the same id.
+    DuplicateSourceId(String),
+    /// Two manual dossiers share the same id.
+    DuplicateManualDossierId(String),
+    /// A manual dossier references a source id absent from `sources`.
+    DanglingManualSource { dossier: String, source: String },
+}
+
+impl std::fmt::Display for WorkspaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkspaceError::ClientMismatch => write!(f, "matter.client must equal client.id"),
+            WorkspaceError::DuplicateSourceId(id) => write!(f, "duplicate source id: {id}"),
+            WorkspaceError::DuplicateManualDossierId(id) => {
+                write!(f, "duplicate manual dossier id: {id}")
+            }
+            WorkspaceError::DanglingManualSource { dossier, source } => {
+                write!(
+                    f,
+                    "manual dossier {dossier} references unknown source {source}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for WorkspaceError {}
+
+/// **Canonical / persistable** matter state, **valid by construction**. Holds
+/// only canonical data: the matter's sources and the user-curated **manual**
+/// dossiers. Dynamic dossiers are NOT stored here — they are derived on demand
+/// (see [`Workspace::view`]). Fields are private; the only ways to obtain a
+/// `Workspace` are the validating [`Workspace::new`] or the serde `TryFrom`
+/// path, so an incoherent state (client/matter mismatch, duplicate ids, dangling
+/// manual source refs, shadow `dossiers`) can never exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RawWorkspace")]
 pub struct Workspace {
-    pub client: Client,
-    pub matter: Matter,
-    pub sources: Vec<SourceRef>,
-    pub manual_dossiers: Vec<ManualDossier>,
+    client: Client,
+    matter: Matter,
+    sources: Vec<SourceRef>,
+    manual_dossiers: Vec<ManualDossier>,
 }
 
 impl Workspace {
+    /// Build a canonical workspace, enforcing referential integrity.
+    pub fn new(
+        client: Client,
+        matter: Matter,
+        sources: Vec<SourceRef>,
+        manual_dossiers: Vec<ManualDossier>,
+    ) -> Result<Self, WorkspaceError> {
+        if matter.client != client.id {
+            return Err(WorkspaceError::ClientMismatch);
+        }
+
+        let mut seen_sources = std::collections::HashSet::new();
+        for source in &sources {
+            if !seen_sources.insert(&source.id) {
+                return Err(WorkspaceError::DuplicateSourceId(source.id.0.clone()));
+            }
+        }
+
+        let mut seen_dossiers = std::collections::HashSet::new();
+        for dossier in &manual_dossiers {
+            if !seen_dossiers.insert(dossier.id()) {
+                return Err(WorkspaceError::DuplicateManualDossierId(
+                    dossier.id().to_string(),
+                ));
+            }
+        }
+
+        for dossier in &manual_dossiers {
+            for source in dossier.sources() {
+                if !seen_sources.contains(source) {
+                    return Err(WorkspaceError::DanglingManualSource {
+                        dossier: dossier.id().to_string(),
+                        source: source.0.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(Self {
+            client,
+            matter,
+            sources,
+            manual_dossiers,
+        })
+    }
+
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    pub fn matter(&self) -> &Matter {
+        &self.matter
+    }
+
+    pub fn sources(&self) -> &[SourceRef] {
+        &self.sources
+    }
+
+    pub fn manual_dossiers(&self) -> &[ManualDossier] {
+        &self.manual_dossiers
+    }
+
     /// Derive the read/render view (dynamic dossiers + manual). The view is
     /// always recomputed from the current `sources`, so it cannot go stale.
     pub fn view(&self) -> WorkspaceView {
@@ -312,6 +409,26 @@ impl Workspace {
             sources: self.sources.clone(),
             dossiers: all_dossier_views(&self.sources, &self.manual_dossiers),
         }
+    }
+}
+
+/// Wire shape for deserializing a [`Workspace`]: `deny_unknown_fields` rejects
+/// shadow/derived fields (e.g. a top-level `dossiers`), then `TryFrom` enforces
+/// referential integrity via [`Workspace::new`].
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawWorkspace {
+    client: Client,
+    matter: Matter,
+    sources: Vec<SourceRef>,
+    manual_dossiers: Vec<ManualDossier>,
+}
+
+impl TryFrom<RawWorkspace> for Workspace {
+    type Error = WorkspaceError;
+
+    fn try_from(raw: RawWorkspace) -> Result<Self, Self::Error> {
+        Workspace::new(raw.client, raw.matter, raw.sources, raw.manual_dossiers)
     }
 }
 
@@ -377,12 +494,8 @@ pub fn sample_workspace() -> Workspace {
     )
     .expect("sample manual dossier id is valid")];
 
-    Workspace {
-        client,
-        matter,
-        sources,
-        manual_dossiers,
-    }
+    Workspace::new(client, matter, sources, manual_dossiers)
+        .expect("sample workspace is internally consistent")
 }
 
 #[cfg(test)]
@@ -445,7 +558,7 @@ mod tests {
     #[test]
     fn manual_dossiers_are_canonical_manual_only_by_type() {
         let ws = sample_workspace();
-        assert!(!ws.manual_dossiers.is_empty());
+        assert!(!ws.manual_dossiers().is_empty());
         // `ManualDossier` has no `kind` field, so canonical state cannot represent
         // a dynamic dossier at all. In the derived view it surfaces as Manual.
         let view = ws.view();
@@ -511,13 +624,22 @@ mod tests {
 
     #[test]
     fn changing_source_type_refreshes_dynamic_view_without_staleness() {
-        let mut ws = sample_workspace();
-        // Reclassify s1 from Documento to Norma. s1 was the only Documento.
-        ws.sources
+        let ws = sample_workspace();
+        // Reclassify s1 from Documento to Norma (s1 was the only Documento) and
+        // rebuild via the public constructor (still a valid graph).
+        let mut sources = ws.sources().to_vec();
+        sources
             .iter_mut()
             .find(|s| s.id == SourceId::new("s1"))
             .unwrap()
             .kind = SourceType::Norma;
+        let ws = Workspace::new(
+            ws.client().clone(),
+            ws.matter().clone(),
+            sources,
+            ws.manual_dossiers().to_vec(),
+        )
+        .expect("reclassified workspace is still valid");
 
         let view = ws.view();
         // The "Documenti" dynamic dossier disappears — no stale membership.
@@ -553,10 +675,10 @@ mod tests {
         let a = sample_workspace();
         let b = sample_workspace();
         assert_eq!(a, b);
-        assert_eq!(a.matter.client, a.client.id);
+        assert_eq!(a.matter().client, a.client().id);
         // every source referenced by a manual dossier exists in the sources.
-        let known: Vec<&SourceId> = a.sources.iter().map(|s| &s.id).collect();
-        for dossier in &a.manual_dossiers {
+        let known: Vec<&SourceId> = a.sources().iter().map(|s| &s.id).collect();
+        for dossier in a.manual_dossiers() {
             for sid in dossier.sources() {
                 assert!(
                     known.contains(&sid),
@@ -633,5 +755,75 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), total, "dossier view ids must be unique");
+    }
+
+    fn client(id: &str) -> Client {
+        Client {
+            id: ClientId::new(id),
+            name: id.to_uppercase(),
+        }
+    }
+
+    fn matter(id: &str, client: &str) -> Matter {
+        Matter {
+            id: MatterId::new(id),
+            client: ClientId::new(client),
+            title: "t".to_string(),
+            subject: "s".to_string(),
+        }
+    }
+
+    #[test]
+    fn workspace_new_rejects_client_matter_mismatch() {
+        let result = Workspace::new(client("alfa"), matter("m", "beta"), vec![], vec![]);
+        assert_eq!(result, Err(WorkspaceError::ClientMismatch));
+    }
+
+    #[test]
+    fn workspace_new_rejects_dangling_manual_source() {
+        let manual = ManualDossier::new("man-x", "X", vec![SourceId::new("ghost")]).unwrap();
+        let result = Workspace::new(client("alfa"), matter("m", "alfa"), vec![], vec![manual]);
+        assert!(matches!(
+            result,
+            Err(WorkspaceError::DanglingManualSource { .. })
+        ));
+    }
+
+    #[test]
+    fn workspace_new_rejects_duplicate_source_ids() {
+        let sources = vec![
+            src("s1", SourceType::Documento),
+            src("s1", SourceType::Norma),
+        ];
+        let result = Workspace::new(client("alfa"), matter("m", "alfa"), sources, vec![]);
+        assert!(matches!(result, Err(WorkspaceError::DuplicateSourceId(_))));
+    }
+
+    #[test]
+    fn workspace_new_rejects_duplicate_manual_dossier_ids() {
+        let m1 = ManualDossier::new("man-x", "X", vec![]).unwrap();
+        let m2 = ManualDossier::new("man-x", "Y", vec![]).unwrap();
+        let result = Workspace::new(client("alfa"), matter("m", "alfa"), vec![], vec![m1, m2]);
+        assert!(matches!(
+            result,
+            Err(WorkspaceError::DuplicateManualDossierId(_))
+        ));
+    }
+
+    #[test]
+    fn workspace_new_accepts_a_valid_graph() {
+        let sources = vec![src("s1", SourceType::Documento)];
+        let manual = ManualDossier::new("man-x", "X", vec![SourceId::new("s1")]).unwrap();
+        assert!(Workspace::new(client("alfa"), matter("m", "alfa"), sources, vec![manual]).is_ok());
+    }
+
+    #[test]
+    fn deserializing_incoherent_workspace_is_rejected() {
+        // matter.client (b) does not match client.id (a).
+        let json = r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"b","title":"t","subject":"s"},"sources":[],"manualDossiers":[]}"#;
+        assert!(serde_json::from_str::<Workspace>(json).is_err());
+        // a manual dossier referencing a non-existent source.
+        let dangling = r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[],"manualDossiers":[{"id":"man-x","name":"X","sources":["ghost"]}]}"#;
+        assert!(serde_json::from_str::<Workspace>(dangling).is_err());
     }
 }
