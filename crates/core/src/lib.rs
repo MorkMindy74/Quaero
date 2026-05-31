@@ -4,6 +4,8 @@
 //! holds the typed IPC contract and pure domain-free logic so it can be tested
 //! in isolation. Tauri depends on `core`, never the other way around.
 
+pub mod domain;
+
 use serde::{Deserialize, Serialize};
 
 /// Request payload for the `ping` round-trip command.

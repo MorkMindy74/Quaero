@@ -30,7 +30,19 @@ test("renders the five cockpit regions", () => {
 test("right context panel is permanent with Sources active by default", () => {
   render(<App />);
   const context = screen.getByTestId("region-context");
-  expect(within(context).getByText("Contratto Rossi-Bianchi.pdf")).toBeInTheDocument();
+  // client · matter header from the typed domain workspace (slice #5A)
+  expect(within(context).getByText(/Alfa S\.r\.l\./)).toBeInTheDocument();
+  // a dynamic Fascicolo (grouped by source type) is shown
+  expect(within(context).getByText(/^Documenti/)).toBeInTheDocument();
+});
+
+test("sources are grouped by typed dossiers; a source can appear in many (domain model)", () => {
+  render(<App />);
+  const context = screen.getByTestId("region-context");
+  // manual Fascicolo present alongside the dynamic ones
+  expect(within(context).getByText(/Produzione avversaria/)).toBeInTheDocument();
+  // s1 (Contratto…) appears both in its dynamic "Documenti" and in the manual dossier
+  expect(within(context).getAllByText(/Contratto Rossi-Bianchi\.pdf/).length).toBeGreaterThanOrEqual(2);
 });
 
 test("switching the context tab to Excerpts changes the card list", () => {

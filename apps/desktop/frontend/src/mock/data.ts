@@ -1,5 +1,6 @@
 // Static mock data for the #3 shell. No domain logic, no persistence, no backend.
 // These are presentational fixtures only (Screen Spec v0.2).
+import type { Workspace } from "../domain/types";
 
 export interface MockMatter {
   id: string;
@@ -104,6 +105,32 @@ export const normativeGenealogy: MockNormativeGenealogy = {
     { id: "nv3", date: "oggi", label: "vigente", current: true },
   ],
   linkedSources: ["Art. 1175 c.c.", "Cass. civ. 12345/2024"],
+};
+
+// Typed workspace mirroring `quaero_core::domain::sample_workspace()` exactly
+// (same deterministic data + dossiers). The grouping logic is tested in Rust;
+// here the result is static (no domain logic in the frontend).
+export const workspace: Workspace = {
+  client: { id: "alfa", name: "Alfa S.r.l." },
+  matter: {
+    id: "rossi-bianchi",
+    client: "alfa",
+    title: "Rossi c. Bianchi",
+    subject: "Inadempimento contrattuale",
+  },
+  sources: [
+    { id: "s1", kind: "Documento", title: "Contratto Rossi-Bianchi.pdf", meta: "pag. 10–14" },
+    { id: "s2", kind: "Norma", title: "Art. 1453 c.c.", meta: "Risoluzione per inadempimento" },
+    { id: "s3", kind: "Giurisprudenza", title: "Cass. civ. 12345/2024", meta: "massima" },
+    { id: "s4", kind: "Nota", title: "Cliente disponibile a transigere", meta: "" },
+  ],
+  dossiers: [
+    { id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] },
+    { id: "dyn-norma", name: "Norme", kind: "Dynamic", sources: ["s2"] },
+    { id: "dyn-giurisprudenza", name: "Giurisprudenza", kind: "Dynamic", sources: ["s3"] },
+    { id: "dyn-nota", name: "Note", kind: "Dynamic", sources: ["s4"] },
+    { id: "man-produzione-avversaria", name: "Produzione avversaria", kind: "Manual", sources: ["s1", "s3"] },
+  ],
 };
 
 export interface MockAgentRow {
