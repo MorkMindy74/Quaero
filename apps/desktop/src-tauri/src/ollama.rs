@@ -87,6 +87,12 @@ impl OllamaLocalProvider {
             // redirect, not even to another loopback host → disable them entirely.
             // Any 3xx then stays a non-success status and is handled as an error.
             .redirect(reqwest::redirect::Policy::none())
+            // Fail-closed local-only #2: reqwest's default client honours ambient
+            // HTTP_PROXY/ALL_PROXY; a configured proxy would receive the prompt
+            // (system + user) before the loopback endpoint is ever reached, even
+            // for a 127.0.0.1 URL. A local provider must never route through a
+            // proxy → disable system/env proxy detection entirely.
+            .no_proxy()
             .build()
             .map_err(|e| format!("errore inizializzazione client locale: {e}"))?;
 
@@ -324,6 +330,84 @@ mod tests {
             err.contains("redirect"),
             "expected a blocked-redirect error, got: {err}"
         );
+    }
+
+    /// Serialises the tests that mutate the process-global proxy env vars so they
+    /// never observe each other's `HTTP_PROXY`/`ALL_PROXY`.
+    static PROXY_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Regression for the Codex critical: reqwest's default client honours
+    /// ambient `HTTP_PROXY`/`ALL_PROXY`, which would route the loopback POST
+    /// (system + user prompt) through a non-loopback proxy. With `.no_proxy()`
+    /// the request must reach ONLY the validated loopback endpoint and never
+    /// touch the proxy — even when both proxy vars are set.
+    #[test]
+    fn ambient_proxy_is_ignored_request_stays_on_loopback() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let _guard = PROXY_ENV_LOCK.lock().unwrap();
+
+        // Loopback "Ollama" that answers a valid 200 so respond() succeeds.
+        let ollama = TcpListener::bind("127.0.0.1:0").expect("bind ollama");
+        let ollama_port = ollama.local_addr().unwrap().port();
+        let ollama_thread = std::thread::spawn(move || {
+            if let Ok((mut s, peer)) = ollama.accept() {
+                assert!(peer.ip().is_loopback(), "ollama reached from non-loopback");
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let body = r#"{"message":{"content":"ok locale"}}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+
+        // Proxy listener: non-blocking so we can assert it got NO connection.
+        let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy");
+        proxy.set_nonblocking(true).unwrap();
+        let proxy_addr = proxy.local_addr().unwrap();
+
+        // Point the ambient proxy env at our proxy listener.
+        let prev_all = std::env::var("ALL_PROXY").ok();
+        let prev_http = std::env::var("HTTP_PROXY").ok();
+        std::env::set_var("ALL_PROXY", format!("http://{proxy_addr}"));
+        std::env::set_var("HTTP_PROXY", format!("http://{proxy_addr}"));
+
+        let provider = OllamaLocalProvider {
+            base_url: format!("http://127.0.0.1:{ollama_port}"),
+            model: "qwen3".to_string(),
+        };
+        let request = ChatRequest {
+            prompt: "bozza riservata".to_string(),
+        };
+        let result = tauri::async_runtime::block_on(provider.respond(&request));
+
+        // Restore the environment before asserting (keep the process clean).
+        match prev_all {
+            Some(v) => std::env::set_var("ALL_PROXY", v),
+            None => std::env::remove_var("ALL_PROXY"),
+        }
+        match prev_http {
+            Some(v) => std::env::set_var("HTTP_PROXY", v),
+            None => std::env::remove_var("HTTP_PROXY"),
+        }
+
+        let reply = result.expect("respond must reach loopback Ollama, not the proxy");
+        assert_eq!(reply.reply, "ok locale");
+
+        // The proxy must never have been contacted: a non-blocking accept with
+        // no pending connection returns WouldBlock.
+        match proxy.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("request was routed through the proxy — local-only bypassed"),
+            Err(e) => panic!("unexpected proxy accept error: {e}"),
+        }
+        ollama_thread.join().ok();
     }
 
     #[test]
