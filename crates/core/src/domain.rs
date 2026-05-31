@@ -30,6 +30,8 @@ macro_rules! id_newtype {
 id_newtype!(ClientId);
 id_newtype!(MatterId);
 id_newtype!(SourceId);
+id_newtype!(ExcerptId);
+id_newtype!(CitationId);
 
 /// The nine kinds of Fonte (ADR-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +312,204 @@ pub fn dossiers_for_source<'a>(
         .collect()
 }
 
+// --- Anti-hallucination chain (#8): Estratto · Ancora · Citazione ----------
+//
+// ADR-0007: an Affermazione is supported by **Estratti di Fonte**, never by a
+// whole Fonte. The types below enforce that *by construction*: a [`Citation`]
+// can only reference an [`ExcerptId`] — there is no field through which it could
+// point at a `SourceId`. The Ancora is a **layout-independent logical locator**
+// (declarative in #8; not computed from parsing).
+
+/// A stable, layout-independent locator of an [`Excerpt`] within its Fonte
+/// (ADR: "Ancora"). Declarative in #8 (e.g. `kind: "clausola", value: "7.2"`);
+/// it points at a logical unit, not a rendered page coordinate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    pub kind: String,
+    pub value: String,
+}
+
+/// Error constructing an [`Excerpt`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExcerptError {
+    /// The quoted text is empty.
+    EmptyQuote,
+    /// The anchor kind or value is empty.
+    EmptyAnchor,
+}
+
+impl std::fmt::Display for ExcerptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExcerptError::EmptyQuote => write!(f, "excerpt quote must not be empty"),
+            ExcerptError::EmptyAnchor => write!(f, "excerpt anchor kind/value must not be empty"),
+        }
+    }
+}
+
+impl std::error::Error for ExcerptError {}
+
+/// A **verifiable portion of a Fonte** that can support an Affermazione (ADR-0007).
+/// Belongs to a [`SourceRef`] (`source_id`), carries the verbatim `quote`, an
+/// [`Anchor`], and — for Documento Fonti with a [`StoredFile`] — an optional
+/// `source_sha256` pinning the content version the excerpt was taken from.
+/// Valid by construction: fields are private; built via [`Excerpt::new`] or the
+/// serde `TryFrom` path, both rejecting an empty quote / anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "RawExcerpt")]
+pub struct Excerpt {
+    id: ExcerptId,
+    source_id: SourceId,
+    anchor: Anchor,
+    quote: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_sha256: Option<String>,
+}
+
+impl Excerpt {
+    pub fn new(
+        id: impl Into<String>,
+        source_id: SourceId,
+        anchor: Anchor,
+        quote: impl Into<String>,
+        source_sha256: Option<String>,
+    ) -> Result<Self, ExcerptError> {
+        let quote = quote.into();
+        if quote.trim().is_empty() {
+            return Err(ExcerptError::EmptyQuote);
+        }
+        if anchor.kind.trim().is_empty() || anchor.value.trim().is_empty() {
+            return Err(ExcerptError::EmptyAnchor);
+        }
+        Ok(Self {
+            id: ExcerptId::new(id),
+            source_id,
+            anchor,
+            quote,
+            source_sha256,
+        })
+    }
+
+    pub fn id(&self) -> &ExcerptId {
+        &self.id
+    }
+    pub fn source_id(&self) -> &SourceId {
+        &self.source_id
+    }
+    pub fn anchor(&self) -> &Anchor {
+        &self.anchor
+    }
+    pub fn quote(&self) -> &str {
+        &self.quote
+    }
+    pub fn source_sha256(&self) -> Option<&str> {
+        self.source_sha256.as_deref()
+    }
+}
+
+/// Wire shape for [`Excerpt`]: `deny_unknown_fields` then `TryFrom` validation.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawExcerpt {
+    id: String,
+    source_id: SourceId,
+    anchor: Anchor,
+    quote: String,
+    #[serde(default)]
+    source_sha256: Option<String>,
+}
+
+impl TryFrom<RawExcerpt> for Excerpt {
+    type Error = ExcerptError;
+
+    fn try_from(raw: RawExcerpt) -> Result<Self, Self::Error> {
+        Excerpt::new(
+            raw.id,
+            raw.source_id,
+            raw.anchor,
+            raw.quote,
+            raw.source_sha256,
+        )
+    }
+}
+
+/// Error constructing a [`Citation`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CitationError {
+    /// The claim text is empty.
+    EmptyClaim,
+}
+
+impl std::fmt::Display for CitationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CitationError::EmptyClaim => write!(f, "citation claim must not be empty"),
+        }
+    }
+}
+
+impl std::error::Error for CitationError {}
+
+/// The link between an Affermazione (`claim`) and the [`Excerpt`] that supports
+/// it. **Crucially, it references only an [`ExcerptId`]** — there is no field to
+/// cite a Fonte directly, so ADR-0007 ("cite Estratti, not Fonti") holds by
+/// construction. Valid by construction: built via [`Citation::new`] or serde
+/// `TryFrom`, both rejecting an empty claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "RawCitation")]
+pub struct Citation {
+    id: CitationId,
+    claim: String,
+    excerpt_id: ExcerptId,
+}
+
+impl Citation {
+    pub fn new(
+        id: impl Into<String>,
+        claim: impl Into<String>,
+        excerpt_id: ExcerptId,
+    ) -> Result<Self, CitationError> {
+        let claim = claim.into();
+        if claim.trim().is_empty() {
+            return Err(CitationError::EmptyClaim);
+        }
+        Ok(Self {
+            id: CitationId::new(id),
+            claim,
+            excerpt_id,
+        })
+    }
+
+    pub fn id(&self) -> &CitationId {
+        &self.id
+    }
+    pub fn claim(&self) -> &str {
+        &self.claim
+    }
+    pub fn excerpt_id(&self) -> &ExcerptId {
+        &self.excerpt_id
+    }
+}
+
+/// Wire shape for [`Citation`]: `deny_unknown_fields` rejects a smuggled
+/// `sourceId` (a Citation may never reference a Fonte), then `TryFrom` validates.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawCitation {
+    id: String,
+    claim: String,
+    excerpt_id: ExcerptId,
+}
+
+impl TryFrom<RawCitation> for Citation {
+    type Error = CitationError;
+
+    fn try_from(raw: RawCitation) -> Result<Self, Self::Error> {
+        Citation::new(raw.id, raw.claim, raw.excerpt_id)
+    }
+}
+
 /// Why a [`Workspace`] is not a valid canonical document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceError {
@@ -321,6 +521,14 @@ pub enum WorkspaceError {
     DuplicateManualDossierId(String),
     /// A manual dossier references a source id absent from `sources`.
     DanglingManualSource { dossier: String, source: String },
+    /// Two excerpts share the same id.
+    DuplicateExcerptId(String),
+    /// An excerpt references a source id absent from `sources`.
+    DanglingExcerptSource { excerpt: String, source: String },
+    /// Two citations share the same id.
+    DuplicateCitationId(String),
+    /// A citation references an excerpt id absent from `excerpts`.
+    DanglingCitationExcerpt { citation: String, excerpt: String },
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -335,6 +543,17 @@ impl std::fmt::Display for WorkspaceError {
                 write!(
                     f,
                     "manual dossier {dossier} references unknown source {source}"
+                )
+            }
+            WorkspaceError::DuplicateExcerptId(id) => write!(f, "duplicate excerpt id: {id}"),
+            WorkspaceError::DanglingExcerptSource { excerpt, source } => {
+                write!(f, "excerpt {excerpt} references unknown source {source}")
+            }
+            WorkspaceError::DuplicateCitationId(id) => write!(f, "duplicate citation id: {id}"),
+            WorkspaceError::DanglingCitationExcerpt { citation, excerpt } => {
+                write!(
+                    f,
+                    "citation {citation} references unknown excerpt {excerpt}"
                 )
             }
         }
@@ -357,15 +576,60 @@ pub struct Workspace {
     matter: Matter,
     sources: Vec<SourceRef>,
     manual_dossiers: Vec<ManualDossier>,
+    // Anti-hallucination chain (#8). `skip_serializing_if` keeps pre-#8
+    // workspaces' on-disk shape byte-for-byte unchanged when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    excerpts: Vec<Excerpt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    citations: Vec<Citation>,
 }
 
 impl Workspace {
-    /// Build a canonical workspace, enforcing referential integrity.
+    /// Build a canonical workspace (no excerpts/citations), enforcing
+    /// referential integrity. Backward-compatible 4-arg constructor.
     pub fn new(
         client: Client,
         matter: Matter,
         sources: Vec<SourceRef>,
         manual_dossiers: Vec<ManualDossier>,
+    ) -> Result<Self, WorkspaceError> {
+        Self::assemble(
+            client,
+            matter,
+            sources,
+            manual_dossiers,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Build a canonical workspace including the anti-hallucination chain
+    /// (Estratti + Citazioni), enforcing full referential integrity (#8).
+    pub fn new_with_evidence(
+        client: Client,
+        matter: Matter,
+        sources: Vec<SourceRef>,
+        manual_dossiers: Vec<ManualDossier>,
+        excerpts: Vec<Excerpt>,
+        citations: Vec<Citation>,
+    ) -> Result<Self, WorkspaceError> {
+        Self::assemble(
+            client,
+            matter,
+            sources,
+            manual_dossiers,
+            excerpts,
+            citations,
+        )
+    }
+
+    fn assemble(
+        client: Client,
+        matter: Matter,
+        sources: Vec<SourceRef>,
+        manual_dossiers: Vec<ManualDossier>,
+        excerpts: Vec<Excerpt>,
+        citations: Vec<Citation>,
     ) -> Result<Self, WorkspaceError> {
         if matter.client != client.id {
             return Err(WorkspaceError::ClientMismatch);
@@ -398,11 +662,41 @@ impl Workspace {
             }
         }
 
+        // #8: excerpts must reference an existing source; ids unique.
+        let mut seen_excerpts = std::collections::HashSet::new();
+        for excerpt in &excerpts {
+            if !seen_excerpts.insert(excerpt.id()) {
+                return Err(WorkspaceError::DuplicateExcerptId(excerpt.id().0.clone()));
+            }
+            if !seen_sources.contains(&excerpt.source_id) {
+                return Err(WorkspaceError::DanglingExcerptSource {
+                    excerpt: excerpt.id().0.clone(),
+                    source: excerpt.source_id.0.clone(),
+                });
+            }
+        }
+
+        // #8: citations must reference an existing excerpt; ids unique.
+        let mut seen_citations = std::collections::HashSet::new();
+        for citation in &citations {
+            if !seen_citations.insert(citation.id()) {
+                return Err(WorkspaceError::DuplicateCitationId(citation.id().0.clone()));
+            }
+            if !seen_excerpts.contains(citation.excerpt_id()) {
+                return Err(WorkspaceError::DanglingCitationExcerpt {
+                    citation: citation.id().0.clone(),
+                    excerpt: citation.excerpt_id().0.clone(),
+                });
+            }
+        }
+
         Ok(Self {
             client,
             matter,
             sources,
             manual_dossiers,
+            excerpts,
+            citations,
         })
     }
 
@@ -422,23 +716,40 @@ impl Workspace {
         &self.manual_dossiers
     }
 
+    pub fn excerpts(&self) -> &[Excerpt] {
+        &self.excerpts
+    }
+
+    pub fn citations(&self) -> &[Citation] {
+        &self.citations
+    }
+
     /// Return a new workspace with one more source, re-validating the whole
-    /// graph via [`Workspace::new`] (e.g. rejects a duplicate source id). Used
-    /// by document import (#6); never mutates in place.
+    /// graph (e.g. rejects a duplicate source id). Used by document import (#6);
+    /// preserves existing excerpts/citations. Never mutates in place.
     pub fn with_source(self, source: SourceRef) -> Result<Self, WorkspaceError> {
         let mut sources = self.sources;
         sources.push(source);
-        Workspace::new(self.client, self.matter, sources, self.manual_dossiers)
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            sources,
+            self.manual_dossiers,
+            self.excerpts,
+            self.citations,
+        )
     }
 
-    /// Derive the read/render view (dynamic dossiers + manual). The view is
-    /// always recomputed from the current `sources`, so it cannot go stale.
+    /// Derive the read/render view (dynamic dossiers + manual) plus the
+    /// canonical excerpts/citations (cloned). Recomputed from canonical state.
     pub fn view(&self) -> WorkspaceView {
         WorkspaceView {
             client: self.client.clone(),
             matter: self.matter.clone(),
             sources: self.sources.clone(),
             dossiers: all_dossier_views(&self.sources, &self.manual_dossiers),
+            excerpts: self.excerpts.clone(),
+            citations: self.citations.clone(),
         }
     }
 }
@@ -453,13 +764,25 @@ struct RawWorkspace {
     matter: Matter,
     sources: Vec<SourceRef>,
     manual_dossiers: Vec<ManualDossier>,
+    // `default` keeps pre-#8 persisted workspaces (without these fields) loadable.
+    #[serde(default)]
+    excerpts: Vec<Excerpt>,
+    #[serde(default)]
+    citations: Vec<Citation>,
 }
 
 impl TryFrom<RawWorkspace> for Workspace {
     type Error = WorkspaceError;
 
     fn try_from(raw: RawWorkspace) -> Result<Self, Self::Error> {
-        Workspace::new(raw.client, raw.matter, raw.sources, raw.manual_dossiers)
+        Workspace::new_with_evidence(
+            raw.client,
+            raw.matter,
+            raw.sources,
+            raw.manual_dossiers,
+            raw.excerpts,
+            raw.citations,
+        )
     }
 }
 
@@ -474,6 +797,8 @@ pub struct WorkspaceView {
     pub matter: Matter,
     pub sources: Vec<SourceRef>,
     pub dossiers: Vec<DossierView>,
+    pub excerpts: Vec<Excerpt>,
+    pub citations: Vec<Citation>,
 }
 
 /// Deterministic sample canonical workspace (fixed ids, no random, no current
@@ -529,8 +854,35 @@ pub fn sample_workspace() -> Workspace {
     )
     .expect("sample manual dossier id is valid")];
 
-    Workspace::new(client, matter, sources, manual_dossiers)
-        .expect("sample workspace is internally consistent")
+    // #8 seed: an Estratto of the Documento s1, and a Citazione that cites it
+    // (an Affermazione supported by that Estratto — never by the whole Fonte).
+    let excerpts = vec![Excerpt::new(
+        "e1",
+        SourceId::new("s1"),
+        Anchor {
+            kind: "clausola".to_string(),
+            value: "7.2".to_string(),
+        },
+        "Il Fornitore potrà recedere con preavviso di quindici giorni.",
+        None,
+    )
+    .expect("sample excerpt is valid")];
+    let citations = vec![Citation::new(
+        "c1",
+        "La clausola 7.2 consente il recesso con preavviso di 15 giorni.",
+        ExcerptId::new("e1"),
+    )
+    .expect("sample citation is valid")];
+
+    Workspace::new_with_evidence(
+        client,
+        matter,
+        sources,
+        manual_dossiers,
+        excerpts,
+        citations,
+    )
+    .expect("sample workspace is internally consistent")
 }
 
 #[cfg(test)]
@@ -960,5 +1312,206 @@ mod tests {
         // a manual dossier referencing a non-existent source.
         let dangling = r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[],"manualDossiers":[{"id":"man-x","name":"X","sources":["ghost"]}]}"#;
         assert!(serde_json::from_str::<Workspace>(dangling).is_err());
+    }
+
+    // --- #8 Estratti / Ancore / Citazioni ---------------------------------
+
+    fn anchor(kind: &str, value: &str) -> Anchor {
+        Anchor {
+            kind: kind.to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn excerpt_new_rejects_empty_quote_or_anchor() {
+        assert_eq!(
+            Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "   ", None),
+            Err(ExcerptError::EmptyQuote)
+        );
+        assert_eq!(
+            Excerpt::new("e1", SourceId::new("s1"), anchor("", "v"), "q", None),
+            Err(ExcerptError::EmptyAnchor)
+        );
+        assert_eq!(
+            Excerpt::new("e1", SourceId::new("s1"), anchor("k", ""), "q", None),
+            Err(ExcerptError::EmptyAnchor)
+        );
+        assert!(Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "q", None).is_ok());
+    }
+
+    #[test]
+    fn citation_new_rejects_empty_claim() {
+        assert_eq!(
+            Citation::new("c1", "  ", ExcerptId::new("e1")),
+            Err(CitationError::EmptyClaim)
+        );
+        assert!(Citation::new("c1", "x", ExcerptId::new("e1")).is_ok());
+    }
+
+    #[test]
+    fn sample_workspace_round_trips_with_excerpts_and_citations() {
+        let ws = sample_workspace();
+        assert_eq!(ws.excerpts().len(), 1);
+        assert_eq!(ws.citations().len(), 1);
+        // the citation points at the excerpt, and the excerpt at a real source
+        assert_eq!(ws.citations()[0].excerpt_id(), ws.excerpts()[0].id());
+        assert!(ws
+            .sources()
+            .iter()
+            .any(|s| &s.id == ws.excerpts()[0].source_id()));
+        let json = serde_json::to_string(&ws).unwrap();
+        assert!(json.contains("\"excerpts\""));
+        assert!(json.contains("\"citations\""));
+        assert!(json.contains("sourceId"));
+        let back: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(ws, back);
+        // the view carries them too
+        let view = ws.view();
+        assert_eq!(view.excerpts.len(), 1);
+        assert_eq!(view.citations.len(), 1);
+    }
+
+    #[test]
+    fn workspace_without_evidence_omits_those_keys_on_serialize() {
+        // backward-compatible on-disk shape: no excerpts/citations keys when empty
+        let ws = Workspace::new(client("alfa"), matter("m", "alfa"), vec![], vec![]).unwrap();
+        let json = serde_json::to_string(&ws).unwrap();
+        assert!(!json.contains("excerpts"));
+        assert!(!json.contains("citations"));
+    }
+
+    #[test]
+    fn pre_8_json_without_evidence_still_loads() {
+        // a pre-#8 persisted workspace (no excerpts/citations) must still load
+        let json = r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[{"id":"s1","kind":"Documento","title":"t","meta":""}],"manualDossiers":[]}"#;
+        let ws: Workspace = serde_json::from_str(json).unwrap();
+        assert!(ws.excerpts().is_empty());
+        assert!(ws.citations().is_empty());
+    }
+
+    #[test]
+    fn workspace_rejects_dangling_excerpt_source() {
+        let excerpt =
+            Excerpt::new("e1", SourceId::new("ghost"), anchor("k", "v"), "q", None).unwrap();
+        let r = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![],
+            vec![],
+            vec![excerpt],
+            vec![],
+        );
+        assert!(matches!(
+            r,
+            Err(WorkspaceError::DanglingExcerptSource { .. })
+        ));
+    }
+
+    #[test]
+    fn workspace_rejects_dangling_citation_excerpt() {
+        let citation = Citation::new("c1", "x", ExcerptId::new("ghost")).unwrap();
+        let r = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![],
+            vec![],
+            vec![],
+            vec![citation],
+        );
+        assert!(matches!(
+            r,
+            Err(WorkspaceError::DanglingCitationExcerpt { .. })
+        ));
+    }
+
+    #[test]
+    fn workspace_rejects_duplicate_excerpt_and_citation_ids() {
+        let src1 = src("s1", SourceType::Documento);
+        let e =
+            |id: &str| Excerpt::new(id, SourceId::new("s1"), anchor("k", "v"), "q", None).unwrap();
+        let dup_ex = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src1.clone()],
+            vec![],
+            vec![e("e1"), e("e1")],
+            vec![],
+        );
+        assert!(matches!(dup_ex, Err(WorkspaceError::DuplicateExcerptId(_))));
+
+        let c = |id: &str| Citation::new(id, "x", ExcerptId::new("e1")).unwrap();
+        let dup_cit = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src1],
+            vec![],
+            vec![e("e1")],
+            vec![c("c1"), c("c1")],
+        );
+        assert!(matches!(
+            dup_cit,
+            Err(WorkspaceError::DuplicateCitationId(_))
+        ));
+    }
+
+    #[test]
+    fn a_citation_cannot_reference_a_fonte_directly() {
+        // hostile JSON: a citation carrying `sourceId` instead of `excerptId`.
+        // deny_unknown_fields rejects `sourceId` (and `excerptId` is missing).
+        let json = r#"{
+            "client":{"id":"a","name":"A"},
+            "matter":{"id":"m","client":"a","title":"t","subject":"s"},
+            "sources":[{"id":"s1","kind":"Documento","title":"t","meta":""}],
+            "manualDossiers":[],
+            "excerpts":[{"id":"e1","sourceId":"s1","anchor":{"kind":"k","value":"v"},"quote":"q"}],
+            "citations":[{"id":"c1","claim":"x","sourceId":"s1"}]
+        }"#;
+        assert!(
+            serde_json::from_str::<Workspace>(json).is_err(),
+            "a citation must reference an excerpt, never a Fonte"
+        );
+    }
+
+    #[test]
+    fn excerpt_wire_shape_is_camelcase_with_optional_sha() {
+        let with_sha = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("clausola", "7.2"),
+            "q",
+            Some("ab".repeat(32)),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&with_sha).unwrap();
+        assert!(json.contains("sourceId"));
+        assert!(json.contains("\"anchor\""));
+        assert!(json.contains("sourceSha256"));
+        let back: Excerpt = serde_json::from_str(&json).unwrap();
+        assert_eq!(with_sha, back);
+
+        // sha omitted when None
+        let no_sha = Excerpt::new(
+            "e2",
+            SourceId::new("s1"),
+            anchor("clausola", "7.2"),
+            "q",
+            None,
+        )
+        .unwrap();
+        let json = serde_json::to_string(&no_sha).unwrap();
+        assert!(!json.contains("sourceSha256"));
+    }
+
+    #[test]
+    fn loaded_excerpt_with_empty_quote_is_rejected() {
+        let json = r#"{
+            "client":{"id":"a","name":"A"},
+            "matter":{"id":"m","client":"a","title":"t","subject":"s"},
+            "sources":[{"id":"s1","kind":"Documento","title":"t","meta":""}],
+            "manualDossiers":[],
+            "excerpts":[{"id":"e1","sourceId":"s1","anchor":{"kind":"k","value":"v"},"quote":"   "}]
+        }"#;
+        assert!(serde_json::from_str::<Workspace>(json).is_err());
     }
 }

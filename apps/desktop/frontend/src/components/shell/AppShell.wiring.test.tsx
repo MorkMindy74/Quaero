@@ -133,6 +133,44 @@ test("#6 importing a document calls import_document and shows the new Fonte", as
   await waitFor(() => expect(within(context).getByText("contract.pdf")).toBeInTheDocument());
 });
 
+test("#8 opening a workspace with excerpts shows real Estratti (quote + anchor + citation)", async () => {
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") {
+      return {
+        client: { id: "alfa", name: "Alfa S.r.l." },
+        matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+        sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+        dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] }],
+        excerpts: [
+          {
+            id: "e1",
+            sourceId: "s1",
+            anchor: { kind: "clausola", value: "7.2" },
+            quote: "Il Fornitore potrà recedere.",
+          },
+        ],
+        citations: [{ id: "c1", claim: "Recesso con preavviso di 15 giorni.", excerptId: "e1" }],
+      };
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+
+  await waitFor(() =>
+    expect(within(context).getByText(/Il Fornitore potrà recedere/)).toBeInTheDocument(),
+  );
+  // the Ancora and the citing claim are shown; the source title too
+  expect(within(context).getByText(/clausola 7\.2/)).toBeInTheDocument();
+  expect(within(context).getByText(/Recesso con preavviso di 15 giorni/)).toBeInTheDocument();
+});
+
 test("#7 chat is isolated per matter — switching Pratica clears the conversation", async () => {
   mockIPC((cmd, args) => {
     if (cmd === "search_workspaces") return [];

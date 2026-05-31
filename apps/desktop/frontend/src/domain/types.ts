@@ -63,22 +63,53 @@ export interface ManualDossier {
   sources: string[];
 }
 
-/** Canonical / persistable state: sources + user-curated manual dossiers only.
- *  Dynamic dossiers are NOT stored here — they are derived (see WorkspaceView). */
+/** Stable, layout-independent locator of an Excerpt within its Fonte (Ancora).
+ *  Declarative in #8. Mirrors `quaero_core::domain::Anchor`. */
+export interface Anchor {
+  kind: string;
+  value: string;
+}
+
+/** A verifiable portion of a Fonte that can support an Affermazione (ADR-0007).
+ *  Mirrors `quaero_core::domain::Excerpt`. */
+export interface Excerpt {
+  id: string;
+  sourceId: string;
+  anchor: Anchor;
+  quote: string;
+  sourceSha256?: string;
+}
+
+/** Link between an Affermazione (`claim`) and the Excerpt that supports it.
+ *  References an `excerptId` only — never a Fonte directly (ADR-0007).
+ *  Mirrors `quaero_core::domain::Citation`. */
+export interface Citation {
+  id: string;
+  claim: string;
+  excerptId: string;
+}
+
+/** Canonical / persistable state: sources + user-curated manual dossiers +
+ *  the anti-hallucination chain (excerpts/citations). Dynamic dossiers are NOT
+ *  stored here — they are derived (see WorkspaceView). */
 export interface Workspace {
   client: Client;
   matter: Matter;
   sources: SourceRef[];
   manualDossiers: ManualDossier[];
+  excerpts?: Excerpt[];
+  citations?: Citation[];
 }
 
-/** Derived, non-canonical view for the UI: dynamic (computed) + manual dossiers.
- *  Mirrors `quaero_core::domain::WorkspaceView`. */
+/** Derived, non-canonical view for the UI: dynamic (computed) + manual dossiers,
+ *  plus the canonical excerpts/citations. Mirrors `quaero_core::domain::WorkspaceView`. */
 export interface WorkspaceView {
   client: Client;
   matter: Matter;
   sources: SourceRef[];
   dossiers: DossierView[];
+  excerpts: Excerpt[];
+  citations: Citation[];
 }
 
 /** Display label for a source type (presentational only). */

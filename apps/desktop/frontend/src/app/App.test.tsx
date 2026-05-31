@@ -48,11 +48,12 @@ test("sources are grouped by typed dossiers; a source can appear in many (domain
   expect(within(context).getAllByText(/Contratto Rossi-Bianchi\.pdf/).length).toBeGreaterThanOrEqual(2);
 });
 
-test("switching the context tab to Excerpts changes the card list", () => {
+test("the Excerpts tab shows an empty state when no workspace is open (#8, no mock fallback)", () => {
   render(<App />);
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  expect(within(context).getByText(/Il Fornitore potrà recedere/)).toBeInTheDocument();
+  // #8: real Estratti come only from an opened workspace; otherwise empty state
+  expect(within(context).getByText("Nessun estratto.")).toBeInTheDocument();
 });
 
 test("the genealogy tab shows the normative genealogy mock", () => {

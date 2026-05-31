@@ -131,6 +131,10 @@ export const workspaceView: WorkspaceView = {
     { id: "dyn-nota", name: "Note", kind: "Dynamic", sources: ["s4"] },
     { id: "man-produzione-avversaria", name: "Produzione avversaria", kind: "Manual", sources: ["s1", "s3"] },
   ],
+  // #8: the demo fallback shows NO mock excerpts/citations — real Estratti come
+  // only from an opened workspace; otherwise the Estratti tab is an empty state.
+  excerpts: [],
+  citations: [],
 };
 
 export interface MockAgentRow {
