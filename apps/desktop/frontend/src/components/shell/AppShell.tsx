@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { TopCommandBar } from "./TopCommandBar";
 import { LeftSidebar } from "./LeftSidebar";
 import { MainWorkspace } from "./MainWorkspace";
@@ -7,15 +8,19 @@ import { StatusStrip } from "./StatusStrip";
 import { CommandPalette } from "./CommandPalette";
 import { NewMatterDialog } from "./NewMatterDialog";
 import { matters, type MockMatter } from "../../mock/data";
-import { openWorkspace as ipcOpenWorkspace } from "../../lib/ipc";
+import { openWorkspace as ipcOpenWorkspace, importDocument } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
+
+/** #6 import cap, mirrors the backend MAX_IMPORT_BYTES (25 MB). */
+const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
 
 // AppShell (Screen Spec v0.2, comp 01): owns the 5-region grid.
 // #5C: the left sidebar + context panel are wired to the real local persistence
 // (create/open/search via #5B IPC). The TopCommandBar / MainWorkspace surfaces
 // stay on the #3 mock for now (out of scope here).
 export default function AppShell() {
+  const { t } = useTranslation();
   const [matter, setMatter] = useState<MockMatter | null>(matters[0]);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -23,6 +28,7 @@ export default function AppShell() {
   const [open, setOpen] = useState<WorkspaceView | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const openById = async (id: string) => {
     setOpenError(null);
@@ -31,6 +37,21 @@ export default function AppShell() {
     } catch {
       setOpen(null);
       setOpenError("matters.errorOpen");
+    }
+  };
+
+  const handleImport = async (file: File) => {
+    setImportError(null);
+    if (!open) return;
+    if (file.size > MAX_IMPORT_BYTES) {
+      setImportError(t("documents.tooLarge"));
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      setOpen(await importDocument(open.matter.id, file.name, bytes));
+    } catch {
+      setImportError(t("documents.importError"));
     }
   };
 
@@ -60,7 +81,11 @@ export default function AppShell() {
           activeId={open?.matter.id ?? null}
         />
         <MainWorkspace matter={matter} />
-        <RightContextPanel workspace={open ?? undefined} />
+        <RightContextPanel
+          workspace={open ?? undefined}
+          onImportFile={open ? (file) => void handleImport(file) : undefined}
+          importError={importError}
+        />
       </div>
       <StatusStrip />
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}

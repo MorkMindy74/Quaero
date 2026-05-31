@@ -11,6 +11,7 @@ pub fn run() {
             commands::workspace::create_workspace,
             commands::workspace::open_workspace,
             commands::workspace::search_workspaces,
+            commands::workspace::import_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quaero");

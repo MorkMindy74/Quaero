@@ -1,6 +1,6 @@
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { afterEach, expect, test } from "vitest";
-import { createWorkspace, openWorkspace, searchWorkspaces } from "./ipc";
+import { createWorkspace, openWorkspace, searchWorkspaces, importDocument } from "./ipc";
 import type { Client, Matter } from "../domain/types";
 
 afterEach(() => clearMocks());
@@ -52,6 +52,18 @@ test("searchWorkspaces forwards the query and returns summaries", async () => {
   const results = await searchWorkspaces("alfa");
   expect(results).toHaveLength(1);
   expect(results[0].id).toBe("rossi-bianchi");
+});
+
+test("importDocument forwards matterId + originalName and returns the updated view", async () => {
+  mockIPC((cmd, args) => {
+    expect(cmd).toBe("import_document");
+    const a = args as { matterId: string; originalName: string };
+    expect(a.matterId).toBe("rossi-bianchi");
+    expect(a.originalName).toBe("Contratto.pdf");
+    return { client, matter, sources: [], dossiers: [] };
+  });
+  const view = await importDocument("rossi-bianchi", "Contratto.pdf", new Uint8Array([1, 2, 3]));
+  expect(view.matter.title).toBe("Rossi c. Bianchi");
 });
 
 test("searchWorkspaces with an empty query returns all saved summaries", async () => {
