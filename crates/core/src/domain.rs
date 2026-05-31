@@ -137,13 +137,34 @@ pub struct DossierView {
     pub sources: Vec<SourceId>,
 }
 
-impl DossierView {
-    pub fn manual(id: impl Into<String>, name: impl Into<String>, sources: Vec<SourceId>) -> Self {
+/// **Canonical** manual Fascicolo. By construction it can only be manual — it
+/// has NO `kind`, so a dynamic dossier can never be represented in canonical
+/// state. The boundary is enforced by the type, not by convention.
+/// `deny_unknown_fields` rejects any payload trying to smuggle in a `kind`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManualDossier {
+    pub id: String,
+    pub name: String,
+    pub sources: Vec<SourceId>,
+}
+
+impl ManualDossier {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, sources: Vec<SourceId>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
-            kind: DossierKind::Manual,
             sources,
+        }
+    }
+
+    /// Render this canonical manual dossier as a (Manual) view entry.
+    pub fn to_view(&self) -> DossierView {
+        DossierView {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            kind: DossierKind::Manual,
+            sources: self.sources.clone(),
         }
     }
 }
@@ -176,9 +197,9 @@ pub fn dynamic_dossiers(sources: &[SourceRef]) -> Vec<DossierView> {
 
 /// All Fascicolo views for rendering: derived **dynamic** dossiers (from the
 /// current `sources`) followed by the canonical **manual** ones.
-pub fn all_dossier_views(sources: &[SourceRef], manual: &[DossierView]) -> Vec<DossierView> {
+pub fn all_dossier_views(sources: &[SourceRef], manual: &[ManualDossier]) -> Vec<DossierView> {
     let mut views = dynamic_dossiers(sources);
-    views.extend(manual.iter().cloned());
+    views.extend(manual.iter().map(ManualDossier::to_view));
     views
 }
 
@@ -202,7 +223,7 @@ pub struct Workspace {
     pub client: Client,
     pub matter: Matter,
     pub sources: Vec<SourceRef>,
-    pub manual_dossiers: Vec<DossierView>,
+    pub manual_dossiers: Vec<ManualDossier>,
 }
 
 impl Workspace {
@@ -272,7 +293,7 @@ pub fn sample_workspace() -> Workspace {
     ];
     // A manual Fascicolo curated by the user. Its sources ALSO appear in their
     // derived dynamic dossiers (many-to-many, no duplication of canonical data).
-    let manual_dossiers = vec![DossierView::manual(
+    let manual_dossiers = vec![ManualDossier::new(
         "man-produzione-avversaria",
         "Produzione avversaria",
         vec![SourceId::new("s1"), SourceId::new("s3")],
@@ -344,13 +365,32 @@ mod tests {
     }
 
     #[test]
-    fn manual_dossiers_are_canonical_and_only_manual() {
+    fn manual_dossiers_are_canonical_manual_only_by_type() {
         let ws = sample_workspace();
         assert!(!ws.manual_dossiers.is_empty());
-        assert!(ws
-            .manual_dossiers
+        // `ManualDossier` has no `kind` field, so canonical state cannot represent
+        // a dynamic dossier at all. In the derived view it surfaces as Manual.
+        let view = ws.view();
+        assert!(view
+            .dossiers
             .iter()
-            .all(|d| d.kind == DossierKind::Manual));
+            .any(|d| d.kind == DossierKind::Manual && d.name == "Produzione avversaria"));
+    }
+
+    #[test]
+    fn canonical_workspace_rejects_a_dynamic_dossier_in_manual_field() {
+        // Hostile payload trying to smuggle a Dynamic dossier into canonical state.
+        let json = r#"{
+            "client": {"id":"alfa","name":"Alfa"},
+            "matter": {"id":"m","client":"alfa","title":"t","subject":"s"},
+            "sources": [],
+            "manual_dossiers": [{"id":"x","name":"X","sources":[],"kind":"Dynamic"}]
+        }"#;
+        let parsed: Result<Workspace, _> = serde_json::from_str(json);
+        assert!(
+            parsed.is_err(),
+            "canonical Workspace must reject a manual dossier carrying a kind/Dynamic field"
+        );
     }
 
     #[test]
@@ -385,10 +425,12 @@ mod tests {
     fn canonical_contract_does_not_persist_dynamic_dossiers() {
         let ws = sample_workspace();
         let json = serde_json::to_string(&ws).unwrap();
-        // The canonical Workspace serializes manual dossiers only.
-        assert!(json.contains("\"Manual\""));
+        // The canonical Workspace serializes manual dossiers only. No DossierKind
+        // is present at all (ManualDossier has none): neither Dynamic nor Manual,
+        // and no derived dynamic dossier ids. (SourceRef.kind = SourceType is fine.)
         assert!(json.contains("Produzione avversaria"));
         assert!(!json.contains("\"Dynamic\""));
+        assert!(!json.contains("\"Manual\""));
         assert!(!json.contains("dyn-"));
     }
 
