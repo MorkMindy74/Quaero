@@ -52,3 +52,16 @@ export function importDocument(
 ): Promise<WorkspaceView> {
   return invoke<WorkspaceView>("import_document", { matterId, originalName, bytes });
 }
+
+// --- #7 chat (stub provider) -----------------------------------------------
+
+/** A chat reply. `grounded` is always false in #7 (no citations). */
+export interface ChatReply {
+  reply: string;
+  grounded: boolean;
+}
+
+/** Send a chat turn to the deterministic stub provider (offline, no LLM). */
+export function chatSend(prompt: string): Promise<ChatReply> {
+  return invoke<ChatReply>("chat_send", { request: { prompt } });
+}

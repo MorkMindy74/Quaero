@@ -5,6 +5,7 @@ import { Panel } from "../ui";
 import { ReasoningStep, GenealogyPreview } from "../cards";
 import { DraftDocument } from "../workspace/DraftDocument";
 import { DraftMetaRail } from "../workspace/DraftMetaRail";
+import { ChatPanel } from "./ChatPanel";
 import { reasoningSteps, genealogyNodes, type MockMatter } from "../../mock/data";
 
 interface MainWorkspaceProps {
@@ -36,13 +37,13 @@ export function MainWorkspace({ matter }: MainWorkspaceProps) {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-6">
-        <ModeSurface mode={mode} />
+        <ModeSurface mode={mode} matterId={matter.id} />
       </div>
     </main>
   );
 }
 
-function ModeSurface({ mode }: { mode: ModeId }) {
+function ModeSurface({ mode, matterId }: { mode: ModeId; matterId: string }) {
   const { t } = useTranslation();
 
   if (mode === "reasoning") {
@@ -80,9 +81,7 @@ function ModeSurface({ mode }: { mode: ModeId }) {
       </div>
     );
   }
-  return (
-    <div data-testid="surface-conversation" className="grid h-full place-items-center text-center text-muted">
-      <p className="text-sm">{t("conversation.grounded", { count: 3 })}</p>
-    </div>
-  );
+  // `key` scopes the chat to the active matter: switching Pratica remounts the
+  // panel and clears its in-memory history → no cross-matter/client bleed (#7).
+  return <ChatPanel key={matterId} />;
 }

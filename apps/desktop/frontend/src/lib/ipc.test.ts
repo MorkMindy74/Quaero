@@ -1,6 +1,12 @@
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { afterEach, expect, test } from "vitest";
-import { createWorkspace, openWorkspace, searchWorkspaces, importDocument } from "./ipc";
+import {
+  createWorkspace,
+  openWorkspace,
+  searchWorkspaces,
+  importDocument,
+  chatSend,
+} from "./ipc";
 import type { Client, Matter } from "../domain/types";
 
 afterEach(() => clearMocks());
@@ -64,6 +70,17 @@ test("importDocument forwards matterId + originalName and returns the updated vi
   });
   const view = await importDocument("rossi-bianchi", "Contratto.pdf", new Uint8Array([1, 2, 3]));
   expect(view.matter.title).toBe("Rossi c. Bianchi");
+});
+
+test("chatSend wraps the prompt as { request: { prompt } } and returns the reply", async () => {
+  mockIPC((cmd, args) => {
+    expect(cmd).toBe("chat_send");
+    expect((args as { request: { prompt: string } }).request.prompt).toBe("ciao");
+    return { reply: "[bozza esplorativa] …", grounded: false };
+  });
+  const reply = await chatSend("ciao");
+  expect(reply.grounded).toBe(false);
+  expect(reply.reply).toContain("bozza esplorativa");
 });
 
 test("searchWorkspaces with an empty query returns all saved summaries", async () => {

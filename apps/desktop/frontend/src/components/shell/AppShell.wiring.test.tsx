@@ -133,6 +133,36 @@ test("#6 importing a document calls import_document and shows the new Fonte", as
   await waitFor(() => expect(within(context).getByText("contract.pdf")).toBeInTheDocument());
 });
 
+test("#7 chat is isolated per matter — switching Pratica clears the conversation", async () => {
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces") return [];
+    if (cmd === "chat_send") {
+      const p = (args as { request: { prompt: string } }).request.prompt;
+      return { reply: `eco: ${p}`, grounded: false };
+    }
+  });
+
+  render(<AppShell />);
+  const workspace = screen.getByTestId("region-workspace");
+
+  // send a chat message under the current matter (mock matters[0])
+  fireEvent.change(within(workspace).getByLabelText("Scrivi un messaggio…"), {
+    target: { value: "segreto cliente A" },
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Invia" }));
+  await waitFor(() => expect(within(workspace).getByText("segreto cliente A")).toBeInTheDocument());
+
+  // switch matter via the top-bar selector
+  const topbar = screen.getByTestId("region-topbar");
+  fireEvent.click(within(topbar).getByRole("button", { name: /Rossi c\. Bianchi/ }));
+  fireEvent.click(within(topbar).getByRole("button", { name: "Eredità Conti" }));
+
+  // the previous conversation must NOT bleed into the other matter
+  await waitFor(() =>
+    expect(within(workspace).queryByText("segreto cliente A")).not.toBeInTheDocument(),
+  );
+});
+
 test("#6 a file over 25 MB is rejected client-side (error shown, no IPC call)", async () => {
   let importCalled = false;
   mockIPC((cmd) => {

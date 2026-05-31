@@ -4,6 +4,7 @@
 //! holds the typed IPC contract and pure domain-free logic so it can be tested
 //! in isolation. Tauri depends on `core`, never the other way around.
 
+pub mod chat;
 pub mod domain;
 pub mod hash;
 pub mod persistence;
