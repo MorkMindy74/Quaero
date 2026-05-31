@@ -44,9 +44,21 @@ impl OllamaLocalProvider {
         Self { base_url, model }
     }
 
+    /// True iff the configured endpoint passes the fail-closed local-only check.
+    /// Used by `chat_provider_kind` so the UI only reports a local model when the
+    /// effective endpoint is genuinely loopback.
+    pub fn endpoint_is_local(&self) -> bool {
+        validate_local_endpoint(&self.base_url).is_ok()
+    }
+
     /// Answer a chat turn via the local Ollama server. Async (uses the Tauri
     /// tokio runtime). Returns a user-facing `String` error, never panics.
     pub async fn respond(&self, request: &ChatRequest) -> Result<ChatReply, String> {
+        // 0) Fail-closed local-only enforcement: reject any non-loopback / non-http
+        //    endpoint BEFORE the Privacy Guard and before any send. This makes
+        //    "local-only" an in-code invariant, not just a default config.
+        validate_local_endpoint(&self.base_url)?;
+
         // 1) Privacy Guard — the prompt is UserContent going to a LocalModel.
         if let Decision::Denied(reason) = PrivacyPolicy.evaluate(&prompt_egress_request()) {
             return Err(format!("privacy: {reason}"));
@@ -97,6 +109,42 @@ fn prompt_egress_request() -> EgressRequest {
         data_class: DataClass::UserContent,
         destination: Destination::LocalModel,
     }
+}
+
+/// Enforce the local-only invariant **in code** (fail-closed). Accepts only an
+/// `http` URL whose host is loopback (`127.0.0.1`, `localhost`, `::1`), with no
+/// userinfo. Rejects remote hosts, `https`, credentials, and ambiguous URLs such
+/// as `http://127.0.0.1@evil.com` (whose real host is `evil.com`).
+fn validate_local_endpoint(raw: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(raw).map_err(|_| format!("endpoint non valido: {raw}"))?;
+    if url.scheme() != "http" {
+        return Err("endpoint non locale: è consentito solo http su loopback".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("endpoint non valido: credenziali nell'URL non consentite".to_string());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "endpoint non valido: host assente".to_string())?;
+    if !is_loopback_host(host) {
+        return Err(format!(
+            "endpoint non locale: host {host} non è loopback (bloccato)"
+        ));
+    }
+    Ok(())
+}
+
+/// Loopback iff `localhost` or an IP that `is_loopback()` (handles 127.0.0.0/8
+/// and `::1`, with optional IPv6 brackets).
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let stripped = host.trim_start_matches('[').trim_end_matches(']');
+    stripped
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 /// Build the `/api/chat` body: system prompt + the user prompt, `stream:false`.
@@ -212,6 +260,49 @@ mod tests {
     fn status_errors_are_friendly() {
         assert!(map_status_error(404).contains("modello non trovato"));
         assert!(map_status_error(500).contains("stato 500"));
+    }
+
+    #[test]
+    fn local_endpoints_are_accepted() {
+        for ok in [
+            "http://127.0.0.1:11434",
+            "http://127.0.0.1",
+            "http://localhost:11434",
+            "http://localhost",
+            "http://[::1]:11434",
+        ] {
+            assert!(validate_local_endpoint(ok).is_ok(), "should accept {ok}");
+        }
+    }
+
+    #[test]
+    fn non_local_endpoints_are_rejected_fail_closed() {
+        for bad in [
+            "http://remote.example:11434", // remote host
+            "http://192.168.1.5:11434",    // LAN, not loopback
+            "https://127.0.0.1:11434",     // https not allowed
+            "http://user:pass@127.0.0.1",  // userinfo
+            "http://127.0.0.1@evil.com",   // ambiguous: real host is evil.com
+            "https://ollama.com/api",      // cloud
+            "ftp://127.0.0.1",             // wrong scheme
+            "not-a-url",                   // unparseable
+        ] {
+            assert!(validate_local_endpoint(bad).is_err(), "must reject {bad}");
+        }
+    }
+
+    #[test]
+    fn endpoint_is_local_reflects_validation() {
+        let local = OllamaLocalProvider {
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "qwen3".to_string(),
+        };
+        assert!(local.endpoint_is_local());
+        let remote = OllamaLocalProvider {
+            base_url: "http://evil.com".to_string(),
+            model: "qwen3".to_string(),
+        };
+        assert!(!remote.endpoint_is_local());
     }
 
     #[test]

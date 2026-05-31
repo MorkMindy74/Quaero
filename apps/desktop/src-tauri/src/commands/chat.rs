@@ -32,7 +32,11 @@ pub async fn chat_send(request: ChatRequest) -> Result<ChatReply, String> {
 /// any user/client data.
 #[tauri::command]
 pub fn chat_provider_kind() -> String {
-    if use_ollama_local() {
+    // Report "ollamaLocal" ONLY when the local provider is enabled AND its
+    // effective endpoint passes the fail-closed loopback check. A misconfigured
+    // (non-local) endpoint reports "stub" — and chat_send fails closed — so the
+    // posture never claims a local model while data could leave the device.
+    if use_ollama_local() && OllamaLocalProvider::from_env().endpoint_is_local() {
         "ollamaLocal".to_string()
     } else {
         "stub".to_string()
