@@ -111,6 +111,20 @@ fn unique_tmp(base: &Path, stem: &str) -> PathBuf {
     base.join(format!("{stem}.{}.{}.tmp", std::process::id(), n))
 }
 
+/// Write `bytes` to `tmp`, then publish to `dest` atomically and exclusively
+/// via `hard_link` (which fails if `dest` already exists). The caller removes
+/// `tmp` afterwards on EVERY outcome, so no partial temp file is ever left.
+fn write_and_publish(tmp: &Path, dest: &Path, bytes: &[u8], id: &str) -> Result<(), StoreError> {
+    fs::write(tmp, bytes)?;
+    match fs::hard_link(tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(StoreError::AlreadyExists(id.to_string()))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 fn summary(ws: &Workspace) -> WorkspaceSummary {
     WorkspaceSummary {
         id: ws.matter().id.0.clone(),
@@ -164,20 +178,14 @@ pub fn create(base: &Path, client: Client, matter: Matter) -> Result<WorkspaceSu
 
     fs::create_dir_all(base)?;
     let tmp = unique_tmp(base, &stem);
-    fs::write(&tmp, json.as_bytes())?;
 
-    // Atomic, exclusive publish: link fails if `path` already exists.
-    let publish = fs::hard_link(&tmp, &path);
-    // The temp link is no longer needed in either outcome.
+    // Write the complete content then publish exclusively. The temp file is
+    // removed on EVERY outcome — write failure, publish failure (AlreadyExists
+    // or other), or success — so create never leaves a partial `.tmp` behind.
+    let outcome = write_and_publish(&tmp, &path, json.as_bytes(), &id);
     let _ = fs::remove_file(&tmp);
 
-    match publish {
-        Ok(()) => Ok(summary(&workspace)),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(StoreError::AlreadyExists(id))
-        }
-        Err(e) => Err(e.into()),
-    }
+    outcome.map(|()| summary(&workspace))
 }
 
 /// Load a saved workspace and return its derived view for the UI. A corrupt,
@@ -301,6 +309,38 @@ mod tests {
             .flatten()
             .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("tmp"));
         assert!(!tmp_left, "no .tmp file should remain after create");
+    }
+
+    #[test]
+    fn failed_create_leaves_no_temp_file_behind() {
+        let dir = tempdir().unwrap();
+        // First create wins and writes dup.json.
+        create(
+            dir.path(),
+            client("alfa", "Alfa"),
+            matter("dup", "alfa", "T"),
+        )
+        .unwrap();
+        // Second create for the same id fails at publish (AlreadyExists) AFTER a
+        // unique temp file has been written — exercising the failure cleanup path.
+        let again = create(
+            dir.path(),
+            client("alfa", "Alfa"),
+            matter("dup", "alfa", "T"),
+        );
+        assert!(matches!(again, Err(StoreError::AlreadyExists(_))));
+
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".tmp")),
+            "failed create must leave no .tmp residue, found: {names:?}"
+        );
+        // Exactly one canonical file survives (the first create's).
+        assert_eq!(names.iter().filter(|n| n.ends_with(".json")).count(), 1);
     }
 
     #[test]
