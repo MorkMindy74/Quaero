@@ -1,0 +1,15 @@
+/* Quaero design tokens (Screen Spec v0.2 §8). Directional values; roles fixed.
+   Parchment is semantic: documents / excerpts / citations / genealogy only. */
+:root {
+  --background: #faf8f3; /* warm off-white — app base */
+  --panel: #ffffff; /* raised surfaces */
+  --panel-2: #f4efe6; /* secondary panel */
+  --parchment: #f0e8d7; /* documents / excerpts / citations / genealogy ONLY */
+  --hairline: #e6dfd1; /* 1px structure, dividers */
+  --ink: #1b1a17; /* primary text, titles */
+  --muted: #837c6e; /* meta, labels, secondary copy */
+  --accent-source: #8a6c2e; /* sources, citations, anchors (brass) */
+  --accent-human: #7a322e; /* human validation seal (oxblood) */
+  --accent-verified: #3f6b4a; /* verified / indexed ok / privacy good */
+  --accent-warning: #b26b1e; /* unverified / attention / stale */
+}
