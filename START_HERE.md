@@ -178,8 +178,8 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 | #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione UI + clic→evidenzia = #8B futura | AFK | #7 |
 | #9  | ✅ **CHIUSA** — Verificatore citazioni: `verify(&Workspace)` puro + report derivato in `WorkspaceView` + tab "Verifica" read-only; `UncitedSource` Info non degrada il verdetto. Re-hash fisico = slice futura | AFK | #8 |
 | #10 | ✅ **CHIUSA** — Privacy guard: contratto `quaero-core::privacy` + `PrivacyPolicy::evaluate` default-deny + riga `StatusStrip`. Enforcement su egress reale = slice future | AFK | #8 |
-| #11 | Valuta clausola + Bozza + export DOCX | AFK | #8 |
-| #12 | Connettore Normattiva | AFK | #10 |
+| #11 | Connettore Normattiva | AFK | #10 |
+| #12 | Valuta clausola + proposta + export DOCX | AFK | #8 |
 | #13 | Connettore giurisprudenza | AFK | #12 |
 | #14 | Firma digitale CNS | HITL | #11 |
 | #15 | Vista Genealogia / Provenance Graph | AFK | #11 |
@@ -189,13 +189,13 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 1. **#2 Scheletro** (sblocca tutto) → poi in parallelo **#3 Design** e **#4 Installer** (HITL, con te).
 2. **#5 Pratiche** → **#6 Ingestione** → **#7 Chat** → **#8 Citazioni**: la spina dorsale del valore.
 3. **#9 Verificatore** + **#10 Privacy guard**: i due moduli critici testati (anti-allucinazione + privacy).
-4. **#11 Redazione/DOCX** → **#15 Genealogia**; connettori **#12/#13**; **#14 Firma CNS** in coda.
+4. **#12 Redazione/DOCX** → **#15 Genealogia**; connettori **#11/#13**; **#14 Firma CNS** in coda.
 
 ## Prossima sessione
 
 **#2, #3, l'intera #5, #6, #7, #8, #9 e #10 completate e mergiate; issue #5, #6, #7, #8, #9 e #10 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata**, e **Privacy Guard** (cintura privacy) in casa. Prossimo step da decidere insieme.
 
-Candidati naturali: **provider LLM reale** dietro `ChatProvider` **+ Privacy Guard** (preflight + Codex **obbligatoria** — sarebbe il **primo egress reale**, deve passare dal Guard e rendere derivata la posture line); **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#11** (Valuta clausola + Bozza + export DOCX); oppure le slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
+Candidati naturali: **provider LLM reale** dietro `ChatProvider` **+ Privacy Guard** (preflight + Codex **obbligatoria** — sarebbe il **primo egress reale**, deve passare dal Guard e rendere derivata la posture line); **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#12** (Valuta clausola + proposta + export DOCX); oppure le slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
