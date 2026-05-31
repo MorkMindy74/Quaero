@@ -81,15 +81,21 @@ pub fn verify(workspace: &Workspace) -> VerificationReport {
     let cited: HashSet<&ExcerptId> = citations.iter().map(|c| c.excerpt_id()).collect();
     // Source ids that back at least one excerpt.
     let sources_with_excerpt: HashSet<&SourceId> = excerpts.iter().map(|e| e.source_id()).collect();
-    // Does this source have stored file bytes? (drives the "document-backed" rule)
-    let has_file = |sid: &SourceId| sources.iter().any(|s| &s.id == sid && s.file.is_some());
+    // Source ids that carry stored file bytes — precomputed once for O(1)
+    // membership (drives the "document-backed" rule), avoiding an O(sources)
+    // scan per excerpt in the loop below.
+    let document_backed_sources: HashSet<&SourceId> = sources
+        .iter()
+        .filter(|s| s.file.is_some())
+        .map(|s| &s.id)
+        .collect();
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut document_backed_excerpts = 0usize;
     let mut pinned_excerpts = 0usize;
 
     for excerpt in excerpts {
-        let backed = has_file(excerpt.source_id());
+        let backed = document_backed_sources.contains(excerpt.source_id());
         if backed {
             document_backed_excerpts += 1;
         }
@@ -311,6 +317,61 @@ mod tests {
         assert_eq!(r.summary.document_backed_excerpts, 1);
         assert_eq!(r.summary.pinned_excerpts, 1);
         assert_eq!(r.summary.warnings, 0);
+    }
+
+    #[test]
+    fn counts_and_order_hold_across_multiple_sources_and_excerpts() {
+        let sha = "ab".repeat(32);
+        // s1: doc with file, has a pinned excerpt (e1, cited)
+        // s2: doc with file, has an UNpinned excerpt (e2, cited) -> 1 Warning
+        // s3: norma (no file), has an excerpt (e3) but NO citation -> Orphan Warning
+        // s4: nota (no file), no excerpt -> UncitedSource Info
+        let ws = Workspace::new_with_evidence(
+            client(),
+            matter(),
+            vec![
+                doc_source_with_file("s1", &sha),
+                doc_source_with_file("s2", &sha),
+                ref_source("s3", SourceType::Norma),
+                ref_source("s4", SourceType::Nota),
+            ],
+            vec![],
+            vec![
+                Excerpt::new("e1", SourceId::new("s1"), anchor(), "q1", Some(sha.clone())).unwrap(),
+                Excerpt::new("e2", SourceId::new("s2"), anchor(), "q2", None).unwrap(),
+                Excerpt::new("e3", SourceId::new("s3"), anchor(), "q3", None).unwrap(),
+            ],
+            vec![
+                Citation::new("c1", "claim1", ExcerptId::new("e1")).unwrap(),
+                Citation::new("c2", "claim2", ExcerptId::new("e2")).unwrap(),
+            ],
+        )
+        .unwrap();
+
+        let r = verify(&ws);
+        assert_eq!(
+            r.summary,
+            VerificationSummary {
+                citations: 2,
+                excerpts: 3,
+                document_backed_excerpts: 2, // e1, e2 (s1/s2 have files); e3 on s3 (no file)
+                pinned_excerpts: 1,          // e1
+                warnings: 2,                 // UnpinnedDocumentExcerpt(e2) + OrphanExcerpt(e3)
+                infos: 1,                    // UncitedSource(s4)
+            }
+        );
+        // deterministic order: findings follow excerpt order (e2 before e3),
+        // then source-order infos (s4). Within one excerpt, orphan precedes
+        // unpinned — but e2 (unpinned) is processed before e3 (orphan).
+        let codes: Vec<VerificationCode> = r.findings.iter().map(|f| f.code).collect();
+        assert_eq!(
+            codes,
+            vec![
+                VerificationCode::UnpinnedDocumentExcerpt, // e2 (excerpt order)
+                VerificationCode::OrphanExcerpt,           // e3
+                VerificationCode::UncitedSource,           // s4 (source order)
+            ]
+        );
     }
 
     #[test]
