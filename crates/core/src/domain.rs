@@ -776,8 +776,9 @@ impl Workspace {
         )
     }
 
-    /// Derive the read/render view (dynamic dossiers + manual) plus the
-    /// canonical excerpts/citations (cloned). Recomputed from canonical state.
+    /// Derive the read/render view (dynamic dossiers + manual), the canonical
+    /// excerpts/citations (cloned), and the citation-chain audit report (#9).
+    /// All recomputed from canonical state; the verification is never persisted.
     pub fn view(&self) -> WorkspaceView {
         WorkspaceView {
             client: self.client.clone(),
@@ -786,6 +787,7 @@ impl Workspace {
             dossiers: all_dossier_views(&self.sources, &self.manual_dossiers),
             excerpts: self.excerpts.clone(),
             citations: self.citations.clone(),
+            verification: crate::verify::verify(self),
         }
     }
 }
@@ -835,6 +837,8 @@ pub struct WorkspaceView {
     pub dossiers: Vec<DossierView>,
     pub excerpts: Vec<Excerpt>,
     pub citations: Vec<Citation>,
+    /// Derived citation-chain audit (#9). Never part of canonical state.
+    pub verification: crate::verify::VerificationReport,
 }
 
 /// Deterministic sample canonical workspace (fixed ids, no random, no current
