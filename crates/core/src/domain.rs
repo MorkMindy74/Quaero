@@ -142,7 +142,7 @@ pub struct DossierView {
 /// state. The boundary is enforced by the type, not by convention.
 /// `deny_unknown_fields` rejects any payload trying to smuggle in a `kind`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManualDossier {
     pub id: String,
     pub name: String,
@@ -218,7 +218,10 @@ pub fn dossiers_for_source<'a>(
 /// **Canonical / persistable** matter state. Holds only canonical data: the
 /// matter's sources and the user-curated **manual** dossiers. Dynamic dossiers
 /// are NOT stored here — they are derived on demand (see [`Workspace::view`]).
+/// `deny_unknown_fields` rejects shadow/derived fields (e.g. a top-level
+/// `dossiers`) so a saved `WorkspaceView` cannot pass as canonical state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Workspace {
     pub client: Client,
     pub matter: Matter,
@@ -244,6 +247,7 @@ impl Workspace {
 /// schema; it is recomputed from canonical state and may be serialized only to
 /// hand the already-derived result to the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
     pub client: Client,
     pub matter: Matter,
@@ -379,18 +383,46 @@ mod tests {
 
     #[test]
     fn canonical_workspace_rejects_a_dynamic_dossier_in_manual_field() {
-        // Hostile payload trying to smuggle a Dynamic dossier into canonical state.
+        // Hostile payload trying to smuggle a Dynamic dossier into a manual one.
         let json = r#"{
             "client": {"id":"alfa","name":"Alfa"},
             "matter": {"id":"m","client":"alfa","title":"t","subject":"s"},
             "sources": [],
-            "manual_dossiers": [{"id":"x","name":"X","sources":[],"kind":"Dynamic"}]
+            "manualDossiers": [{"id":"x","name":"X","sources":[],"kind":"Dynamic"}]
         }"#;
         let parsed: Result<Workspace, _> = serde_json::from_str(json);
         assert!(
             parsed.is_err(),
-            "canonical Workspace must reject a manual dossier carrying a kind/Dynamic field"
+            "ManualDossier must reject a smuggled kind/Dynamic field"
         );
+    }
+
+    #[test]
+    fn canonical_workspace_rejects_top_level_shadow_dossiers() {
+        // Valid manualDossiers + an extra top-level `dossiers` (derived view state).
+        // deny_unknown_fields on Workspace must reject it so a saved WorkspaceView
+        // cannot pass as a canonical document under #5B.
+        let json = r#"{
+            "client": {"id":"alfa","name":"Alfa"},
+            "matter": {"id":"m","client":"alfa","title":"t","subject":"s"},
+            "sources": [],
+            "manualDossiers": [],
+            "dossiers": [{"id":"dyn-x","name":"X","kind":"Dynamic","sources":[]}]
+        }"#;
+        let parsed: Result<Workspace, _> = serde_json::from_str(json);
+        assert!(
+            parsed.is_err(),
+            "canonical Workspace must reject a shadow top-level `dossiers` field"
+        );
+    }
+
+    #[test]
+    fn canonical_workspace_wire_shape_is_camelcase() {
+        let json = serde_json::to_string(&sample_workspace()).unwrap();
+        assert!(json.contains("manualDossiers"));
+        assert!(!json.contains("manual_dossiers"));
+        assert!(!json.contains("\"dossiers\""));
+        assert!(!json.contains("Dynamic"));
     }
 
     #[test]
