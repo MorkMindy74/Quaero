@@ -21,3 +21,10 @@ test("AppShell renders the five cockpit regions", () => {
   expect(screen.getByTestId("region-context")).toBeInTheDocument();
   expect(screen.getByTestId("region-status")).toBeInTheDocument();
 });
+
+test("#10 the status strip shows the local-only privacy posture", () => {
+  render(<AppShell />);
+  expect(screen.getByTestId("status-privacy")).toHaveTextContent(
+    "Privacy: locale · nessun dato esce dal dispositivo",
+  );
+});

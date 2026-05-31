@@ -35,6 +35,10 @@ export function StatusStrip() {
         <span className="h-2 w-2 rounded-full bg-accent-verified" /> {t("status.localPrivate")}
       </span>
       {sep}
+      {/* #10 Privacy Guard posture. True for the current build (no egress path
+          exists). A future egress slice MUST make this derived/conditional. */}
+      <span data-testid="status-privacy">{t("status.privacy")}</span>
+      {sep}
       <span data-testid="status-connectivity">
         {core === "ok" ? t("status.coreActive") : core === "err" ? t("status.coreErr") : "…"}
       </span>
