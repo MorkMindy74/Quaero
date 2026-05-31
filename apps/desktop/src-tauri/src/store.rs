@@ -20,17 +20,28 @@
 //! - `open` is strict (corrupt/inconsistent files error); `search` is tolerant
 //!   (skips them).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use quaero_core::domain::{Client, Matter, Workspace, WorkspaceView};
+use quaero_core::domain::{
+    Client, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace, WorkspaceView,
+};
+use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
 use serde::Serialize;
+
+/// Maximum size of a single imported document (#6 cap; no streaming yet).
+pub const MAX_IMPORT_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Per-process counter giving each in-flight write its own temp file, so two
 /// concurrent writers never collide on a shared temp path.
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Per-process counter feeding generated, filesystem-safe source ids.
+static SOURCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Lightweight listing entry for create/search results (never the full workspace).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,6 +69,8 @@ pub enum StoreError {
     /// A stored file could not be parsed, or its embedded id does not match its
     /// file stem (hostile / mislabeled file).
     Corrupt { id: String, reason: String },
+    /// The imported file exceeds the size cap.
+    TooLarge { limit: u64, actual: u64 },
     /// Filesystem error.
     Io(String),
 }
@@ -70,6 +83,9 @@ impl std::fmt::Display for StoreError {
             StoreError::AlreadyExists(id) => write!(f, "workspace already exists: {id}"),
             StoreError::Domain(msg) => write!(f, "invalid workspace: {msg}"),
             StoreError::Corrupt { id, reason } => write!(f, "corrupt workspace {id}: {reason}"),
+            StoreError::TooLarge { limit, actual } => {
+                write!(f, "file too large: {actual} bytes (limit {limit})")
+            }
             StoreError::Io(msg) => write!(f, "filesystem error: {msg}"),
         }
     }
@@ -109,6 +125,53 @@ fn workspace_path(base: &Path, id: &str) -> Result<PathBuf, StoreError> {
 fn unique_tmp(base: &Path, stem: &str) -> PathBuf {
     let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     base.join(format!("{stem}.{}.{}.tmp", std::process::id(), n))
+}
+
+/// Generate a filesystem-safe source id. Never derived from user input, so it
+/// can't carry path separators or traversal.
+fn new_source_id() -> String {
+    let n = SOURCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("doc-{}-{}", std::process::id(), n)
+}
+
+/// Derive a safe file extension from the original name: lowercase ASCII
+/// alphanumerics only, capped; never includes separators or dots. Empty → "bin".
+fn safe_extension(original_name: &str) -> String {
+    let raw = original_name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .take(12)
+        .collect();
+    if cleaned.is_empty() {
+        "bin".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Sanitise the original name for display only (strip control chars). Never used
+/// as a path. Empty → a generic label.
+fn display_title(original_name: &str) -> String {
+    let t: String = original_name.chars().filter(|c| !c.is_control()).collect();
+    let t = t.trim();
+    if t.is_empty() {
+        "Documento".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+/// In-process, per-matter lock so concurrent read-modify-write imports into the
+/// same Pratica are serialised (no last-write-wins source loss). Single-process
+/// only by design — no cross-process locking, no database.
+fn matter_lock(base: &Path, matter_id: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let registry = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = format!("{}|{}", base.display(), matter_id);
+    let mut guard = registry.lock().expect("matter-lock registry poisoned");
+    Arc::clone(guard.entry(key).or_insert_with(|| Arc::new(Mutex::new(()))))
 }
 
 /// Write `bytes` to `tmp`, then publish to `dest` atomically and exclusively
@@ -235,6 +298,100 @@ pub fn search(base: &Path, query: &str) -> Result<Vec<WorkspaceSummary>, StoreEr
 
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
+}
+
+/// Atomically overwrite an existing workspace's canonical JSON (unique temp +
+/// rename). Used by import to persist a workspace that gained a source.
+pub fn update(base: &Path, workspace: &Workspace) -> Result<(), StoreError> {
+    let id = workspace.matter().id.0.clone();
+    let path = workspace_path(base, &id)?;
+    fs::create_dir_all(base)?;
+    let json = persistence::to_json(workspace).map_err(|e| StoreError::Domain(e.to_string()))?;
+    let tmp = unique_tmp(base, safe_file_stem(&id)?);
+    fs::write(&tmp, json.as_bytes())?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Import a local file as a Documento Fonte into an existing Pratica (#6).
+///
+/// Contract:
+/// - the file content is written **first** (atomically), then the canonical
+///   JSON is updated — so the JSON never references a missing blob; the only
+///   failure residue is a harmless orphan blob;
+/// - the on-disk names are **generated** (`source id` + sanitised extension);
+///   `original_name` is kept as display metadata only and never becomes a path;
+/// - a per-matter in-process lock serialises the read-modify-write so concurrent
+///   imports into the same Pratica cannot drop a source via last-write-wins;
+/// - files above [`MAX_IMPORT_BYTES`] are rejected (no streaming yet).
+///
+/// Returns the updated [`WorkspaceView`] for the UI.
+pub fn import_document(
+    workspaces_dir: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    original_name: &str,
+    bytes: &[u8],
+) -> Result<WorkspaceView, StoreError> {
+    if bytes.len() as u64 > MAX_IMPORT_BYTES {
+        return Err(StoreError::TooLarge {
+            limit: MAX_IMPORT_BYTES,
+            actual: bytes.len() as u64,
+        });
+    }
+
+    // Validate the matter id (also the files subdir name) before anything else.
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    // Serialise read-modify-write per matter.
+    let lock = matter_lock(workspaces_dir, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    // The Pratica must already exist.
+    let ws_path = workspace_path(workspaces_dir, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    // Generated, safe names — never derived from `original_name`.
+    let source_id = new_source_id();
+    let ext = safe_extension(original_name);
+    let stored_name = format!("{source_id}.{ext}");
+    let sha256 = sha256_hex(bytes);
+
+    // 1) Write the blob atomically under files/<matter>/<stored_name>.
+    let matter_dir = files_dir.join(&matter_stem);
+    fs::create_dir_all(&matter_dir)?;
+    let blob_path = matter_dir.join(&stored_name);
+    let tmp = unique_tmp(&matter_dir, &source_id);
+    fs::write(&tmp, bytes)?;
+    if let Err(e) = fs::rename(&tmp, &blob_path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+
+    // 2) Register the canonical SourceRef and update the JSON.
+    let source = SourceRef {
+        id: SourceId::new(source_id),
+        kind: SourceType::Documento,
+        title: display_title(original_name),
+        meta: format!("{} byte", bytes.len()),
+        file: Some(StoredFile {
+            stored_name,
+            original_name: original_name.to_string(),
+            byte_len: bytes.len() as u64,
+            sha256,
+        }),
+    };
+    let updated = workspace
+        .with_source(source)
+        .map_err(|e| StoreError::Domain(e.to_string()))?;
+    update(workspaces_dir, &updated)?;
+    Ok(updated.view())
 }
 
 #[cfg(test)]
@@ -567,5 +724,175 @@ mod tests {
         let dir = tempdir().unwrap();
         let sub = dir.path().join("does-not-exist");
         assert!(search(&sub, "").unwrap().is_empty());
+    }
+
+    // --- #6 document ingestion --------------------------------------------
+
+    fn dirs(root: &Path) -> (PathBuf, PathBuf) {
+        (root.join("workspaces"), root.join("files"))
+    }
+
+    #[test]
+    fn import_writes_blob_registers_source_and_persists() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(
+            &ws,
+            client("alfa", "Alfa"),
+            matter("rossi", "alfa", "Rossi"),
+        )
+        .unwrap();
+
+        let view = import_document(&ws, &files, "rossi", "Contratto.PDF", b"hello pdf").unwrap();
+
+        let docs: Vec<_> = view
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SourceType::Documento))
+            .collect();
+        assert_eq!(docs.len(), 1);
+        let f = docs[0].file.as_ref().unwrap();
+        assert_eq!(f.original_name, "Contratto.PDF");
+        assert_eq!(f.byte_len, 9);
+        assert_eq!(f.sha256, sha256_hex(b"hello pdf"));
+        assert!(f.stored_name.ends_with(".pdf")); // extension sanitised+lowercased
+
+        // the bytes live on disk under files/rossi/<stored_name>
+        let blob = files.join("rossi").join(&f.stored_name);
+        assert!(blob.exists());
+        assert_eq!(fs::read(&blob).unwrap(), b"hello pdf");
+
+        // re-open shows the imported Documento
+        let reopened = open(&ws, "rossi").unwrap();
+        assert!(reopened
+            .sources
+            .iter()
+            .any(|s| matches!(s.kind, SourceType::Documento)));
+    }
+
+    #[test]
+    fn imported_workspace_json_has_metadata_not_bytes() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(
+            &ws,
+            client("alfa", "Alfa"),
+            matter("rossi", "alfa", "Rossi"),
+        )
+        .unwrap();
+        import_document(&ws, &files, "rossi", "Contratto.pdf", b"hello pdf").unwrap();
+
+        let raw = fs::read_to_string(ws.join("rossi.json")).unwrap();
+        assert!(raw.contains("sha256"));
+        assert!(raw.contains("storedName"));
+        assert!(raw.contains("byteLen"));
+        // the file content (bytes) is NEVER embedded in the canonical JSON
+        assert!(!raw.contains("hello pdf"));
+    }
+
+    #[test]
+    fn hostile_original_name_cannot_escape_the_store() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(
+            &ws,
+            client("alfa", "Alfa"),
+            matter("rossi", "alfa", "Rossi"),
+        )
+        .unwrap();
+
+        let view = import_document(&ws, &files, "rossi", "../../etc/passwd", b"x").unwrap();
+        let f = view.sources.iter().find_map(|s| s.file.as_ref()).unwrap();
+        // stored name is generated: no separators, no traversal
+        assert!(!f.stored_name.contains('/'));
+        assert!(!f.stored_name.contains('\\'));
+        assert!(!f.stored_name.contains(".."));
+        // original name preserved as display metadata only
+        assert_eq!(f.original_name, "../../etc/passwd");
+        // exactly one blob, and it lives under files/rossi/
+        let entries: Vec<_> = fs::read_dir(files.join("rossi"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(entries.len(), 1);
+        // nothing escaped above the files dir
+        assert!(!tmp.path().join("etc").exists());
+    }
+
+    #[test]
+    fn import_rejects_unsafe_matter_id() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        let r = import_document(&ws, &files, "../evil", "a.txt", b"x");
+        assert!(matches!(r, Err(StoreError::UnsafeId(_))));
+    }
+
+    #[test]
+    fn import_enforces_size_cap() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(
+            &ws,
+            client("alfa", "Alfa"),
+            matter("rossi", "alfa", "Rossi"),
+        )
+        .unwrap();
+        let big = vec![0u8; (MAX_IMPORT_BYTES + 1) as usize];
+        let r = import_document(&ws, &files, "rossi", "big.bin", &big);
+        assert!(matches!(r, Err(StoreError::TooLarge { .. })));
+        // nothing was written
+        assert!(!files.join("rossi").exists());
+    }
+
+    #[test]
+    fn import_into_missing_matter_is_not_found() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        let r = import_document(&ws, &files, "ghost", "a.txt", b"x");
+        assert!(matches!(r, Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn concurrent_imports_into_same_matter_keep_every_source() {
+        use std::thread;
+
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(
+            &ws,
+            client("alfa", "Alfa"),
+            matter("rossi", "alfa", "Rossi"),
+        )
+        .unwrap();
+        let ws = Arc::new(ws);
+        let files = Arc::new(files);
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let ws = Arc::clone(&ws);
+                let files = Arc::clone(&files);
+                thread::spawn(move || {
+                    import_document(
+                        ws.as_path(),
+                        files.as_path(),
+                        "rossi",
+                        &format!("f{i}.txt"),
+                        format!("content-{i}").as_bytes(),
+                    )
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().unwrap();
+        }
+
+        // every concurrent import survived the read-modify-write (no lost source)
+        let view = open(ws.as_path(), "rossi").unwrap();
+        let docs = view
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SourceType::Documento))
+            .count();
+        assert_eq!(docs, 8);
     }
 }

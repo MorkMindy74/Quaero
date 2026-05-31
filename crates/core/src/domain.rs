@@ -113,7 +113,24 @@ pub struct Matter {
     pub subject: String,
 }
 
-/// A minimal citable reference (Fonte). Not yet an Estratto/Ancora.
+/// Descriptor linking a `SourceRef` to its imported file content on disk.
+/// Metadata only — the bytes live in the desktop blob store, never here. The
+/// `sha256` digest pins the imported content (integrity / future Ancora base).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoredFile {
+    /// Safe on-disk filename (generated; never derived from `original_name`).
+    pub stored_name: String,
+    /// Original filename provided by the user (display only, never a path).
+    pub original_name: String,
+    /// Size of the stored content, in bytes.
+    pub byte_len: u64,
+    /// Lowercase hex SHA-256 of the imported bytes.
+    pub sha256: String,
+}
+
+/// A minimal citable reference (Fonte). Not yet an Estratto/Ancora. A Documento
+/// may carry a [`StoredFile`] link to its imported content (#6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRef {
@@ -121,6 +138,11 @@ pub struct SourceRef {
     pub kind: SourceType,
     pub title: String,
     pub meta: String,
+    /// Present for imported Documento sources; `None` for reference-only Fonti.
+    /// `serde(default)` keeps pre-#6 workspaces (without this field) loadable;
+    /// `skip_serializing_if` keeps file-less sources' JSON unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<StoredFile>,
 }
 
 /// Whether a Fascicolo/view is generated from source types or curated by hand.
@@ -400,6 +422,15 @@ impl Workspace {
         &self.manual_dossiers
     }
 
+    /// Return a new workspace with one more source, re-validating the whole
+    /// graph via [`Workspace::new`] (e.g. rejects a duplicate source id). Used
+    /// by document import (#6); never mutates in place.
+    pub fn with_source(self, source: SourceRef) -> Result<Self, WorkspaceError> {
+        let mut sources = self.sources;
+        sources.push(source);
+        Workspace::new(self.client, self.matter, sources, self.manual_dossiers)
+    }
+
     /// Derive the read/render view (dynamic dossiers + manual). The view is
     /// always recomputed from the current `sources`, so it cannot go stale.
     pub fn view(&self) -> WorkspaceView {
@@ -465,24 +496,28 @@ pub fn sample_workspace() -> Workspace {
             kind: SourceType::Documento,
             title: "Contratto Rossi-Bianchi.pdf".to_string(),
             meta: "pag. 10–14".to_string(),
+            file: None,
         },
         SourceRef {
             id: SourceId::new("s2"),
             kind: SourceType::Norma,
             title: "Art. 1453 c.c.".to_string(),
             meta: "Risoluzione per inadempimento".to_string(),
+            file: None,
         },
         SourceRef {
             id: SourceId::new("s3"),
             kind: SourceType::Giurisprudenza,
             title: "Cass. civ. 12345/2024".to_string(),
             meta: "massima".to_string(),
+            file: None,
         },
         SourceRef {
             id: SourceId::new("s4"),
             kind: SourceType::Nota,
             title: "Cliente disponibile a transigere".to_string(),
             meta: String::new(),
+            file: None,
         },
     ];
     // A manual Fascicolo curated by the user. Its sources ALSO appear in their
@@ -508,6 +543,7 @@ mod tests {
             kind,
             title: id.to_string(),
             meta: String::new(),
+            file: None,
         }
     }
 
@@ -815,6 +851,105 @@ mod tests {
         let sources = vec![src("s1", SourceType::Documento)];
         let manual = ManualDossier::new("man-x", "X", vec![SourceId::new("s1")]).unwrap();
         assert!(Workspace::new(client("alfa"), matter("m", "alfa"), sources, vec![manual]).is_ok());
+    }
+
+    #[test]
+    fn with_source_adds_a_valid_source() {
+        let ws = Workspace::new(client("alfa"), matter("m", "alfa"), vec![], vec![]).unwrap();
+        let doc = SourceRef {
+            id: SourceId::new("doc-1"),
+            kind: SourceType::Documento,
+            title: "Contratto.pdf".to_string(),
+            meta: "12 byte".to_string(),
+            file: Some(StoredFile {
+                stored_name: "doc-1.pdf".to_string(),
+                original_name: "Contratto.pdf".to_string(),
+                byte_len: 12,
+                sha256: "ab".repeat(32),
+            }),
+        };
+        let ws = ws.with_source(doc).unwrap();
+        assert_eq!(ws.sources().len(), 1);
+        assert_eq!(ws.sources()[0].id, SourceId::new("doc-1"));
+        assert!(ws.sources()[0].file.is_some());
+        // it surfaces in the derived "Documenti" dynamic dossier
+        assert!(ws.view().dossiers.iter().any(|d| d.name == "Documenti"));
+    }
+
+    #[test]
+    fn with_source_rejects_duplicate_id() {
+        let ws = Workspace::new(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src("s1", SourceType::Documento)],
+            vec![],
+        )
+        .unwrap();
+        let dup = src("s1", SourceType::Norma);
+        assert!(matches!(
+            ws.with_source(dup),
+            Err(WorkspaceError::DuplicateSourceId(_))
+        ));
+    }
+
+    #[test]
+    fn source_ref_with_file_round_trips() {
+        let doc = SourceRef {
+            id: SourceId::new("doc-1"),
+            kind: SourceType::Documento,
+            title: "C.pdf".to_string(),
+            meta: String::new(),
+            file: Some(StoredFile {
+                stored_name: "doc-1.pdf".to_string(),
+                original_name: "C.pdf".to_string(),
+                byte_len: 3,
+                sha256: "ba7816bf".to_string(),
+            }),
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        // camelCase wire shape for StoredFile
+        assert!(json.contains("storedName"));
+        assert!(json.contains("originalName"));
+        assert!(json.contains("byteLen"));
+        assert!(json.contains("sha256"));
+        let back: SourceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc, back);
+    }
+
+    #[test]
+    fn source_ref_without_file_is_backward_compatible() {
+        // pre-#6 JSON (no `file`) still deserializes, with file = None…
+        let legacy = r#"{"id":"s1","kind":"Documento","title":"t","meta":"m"}"#;
+        let parsed: SourceRef = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.file.is_none());
+        // …and a file-less source serializes WITHOUT a `file` key (unchanged shape).
+        let json = serde_json::to_string(&parsed).unwrap();
+        assert!(!json.contains("file"));
+    }
+
+    #[test]
+    fn workspace_json_with_documento_carries_sha256_not_bytes() {
+        let ws = Workspace::new(client("alfa"), matter("m", "alfa"), vec![], vec![]).unwrap();
+        let ws = ws
+            .with_source(SourceRef {
+                id: SourceId::new("doc-1"),
+                kind: SourceType::Documento,
+                title: "C.pdf".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: "doc-1.pdf".to_string(),
+                    original_name: "C.pdf".to_string(),
+                    byte_len: 3,
+                    sha256: "deadbeef".to_string(),
+                }),
+            })
+            .unwrap();
+        let json = crate::persistence::to_json(&ws).unwrap();
+        assert!(json.contains("sha256"));
+        assert!(json.contains("deadbeef"));
+        assert!(json.contains("storedName"));
+        // the canonical JSON references the file by name + digest, never bytes.
+        assert!(!json.contains("bytes"));
     }
 
     #[test]

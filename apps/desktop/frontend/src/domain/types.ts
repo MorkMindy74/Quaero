@@ -27,12 +27,24 @@ export interface Matter {
   subject: string;
 }
 
-/** Minimal citable reference (Fonte) — not yet an Estratto/Ancora. */
+/** Link from a SourceRef to its imported file content on disk (#6). Metadata
+ *  only — the bytes live in the desktop blob store, never here. Mirrors
+ *  `quaero_core::domain::StoredFile`. */
+export interface StoredFile {
+  storedName: string;
+  originalName: string;
+  byteLen: number;
+  sha256: string;
+}
+
+/** Minimal citable reference (Fonte) — not yet an Estratto/Ancora.
+ *  A Documento may carry a `file` link to its imported content (#6). */
 export interface SourceRef {
   id: string;
   kind: SourceType;
   title: string;
   meta: string;
+  file?: StoredFile;
 }
 
 /** A "Fascicolo" as a VIEW over sources (ADR-0008), many-to-many. */

@@ -41,3 +41,14 @@ export function openWorkspace(id: string): Promise<WorkspaceView> {
 export function searchWorkspaces(query: string): Promise<WorkspaceSummary[]> {
   return invoke<WorkspaceSummary[]>("search_workspaces", { query });
 }
+
+/** Import a local file as a Documento Fonte into a Pratica (#6). The caller
+ *  reads the file with `<input type="file">` + `arrayBuffer` and passes the
+ *  bytes; the backend stores them and returns the updated view. */
+export function importDocument(
+  matterId: string,
+  originalName: string,
+  bytes: Uint8Array,
+): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("import_document", { matterId, originalName, bytes });
+}

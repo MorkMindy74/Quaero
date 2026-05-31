@@ -89,3 +89,73 @@ test("#5C search errors surface as an inline message (no crash)", async () => {
     expect(within(sidebar).getByText("Errore nel caricamento delle Pratiche.")).toBeInTheDocument(),
   );
 });
+
+test("#6 importing a document calls import_document and shows the new Fonte", async () => {
+  let imported: { matterId: string; originalName: string } | null = null;
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa", title: "Rossi" }];
+    if (cmd === "open_workspace") return viewOf("Alfa", "Rossi");
+    if (cmd === "import_document") {
+      const a = args as { matterId: string; originalName: string };
+      imported = { matterId: a.matterId, originalName: a.originalName };
+      return {
+        client: { id: "c", name: "Alfa" },
+        matter: { id: "m", client: "c", title: "Rossi", subject: "s" },
+        sources: [
+          {
+            id: "doc-1",
+            kind: "Documento",
+            title: "contract.pdf",
+            meta: "3 byte",
+            file: { storedName: "doc-1.pdf", originalName: "contract.pdf", byteLen: 3, sha256: "ab" },
+          },
+        ],
+        dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["doc-1"] }],
+      };
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi"));
+
+  const context = screen.getByTestId("region-context");
+  const input = await within(context).findByLabelText("Importa documento");
+  const file = new File([new Uint8Array([1, 2, 3])], "contract.pdf", { type: "application/pdf" });
+  // jsdom does not implement Blob.arrayBuffer(); stub it for this instance.
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new Uint8Array([1, 2, 3]).buffer,
+  });
+  fireEvent.change(input, { target: { files: [file] } });
+
+  await waitFor(() => expect(imported).not.toBeNull());
+  expect(imported!.originalName).toBe("contract.pdf");
+  await waitFor(() => expect(within(context).getByText("contract.pdf")).toBeInTheDocument());
+});
+
+test("#6 a file over 25 MB is rejected client-side (error shown, no IPC call)", async () => {
+  let importCalled = false;
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa", title: "Rossi" }];
+    if (cmd === "open_workspace") return viewOf("Alfa", "Rossi");
+    if (cmd === "import_document") {
+      importCalled = true;
+      return viewOf("Alfa", "Rossi");
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi"));
+
+  const context = screen.getByTestId("region-context");
+  const input = await within(context).findByLabelText("Importa documento");
+  const big = new File([new Uint8Array([1])], "big.bin");
+  Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+  fireEvent.change(input, { target: { files: [big] } });
+
+  await waitFor(() =>
+    expect(within(context).getByText("File troppo grande (limite 25 MB).")).toBeInTheDocument(),
+  );
+  expect(importCalled).toBe(false);
+});
