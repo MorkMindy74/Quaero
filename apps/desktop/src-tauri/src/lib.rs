@@ -2,6 +2,7 @@
 //! maps IPC commands onto pure core logic (ADR-0011); it holds no domain logic.
 
 mod commands;
+mod ollama;
 mod store;
 
 pub fn run() {
@@ -13,6 +14,7 @@ pub fn run() {
             commands::workspace::search_workspaces,
             commands::workspace::import_document,
             commands::chat::chat_send,
+            commands::chat::chat_provider_kind,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quaero");
