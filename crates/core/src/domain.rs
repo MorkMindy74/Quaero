@@ -171,9 +171,13 @@ impl std::error::Error for ManualDossierError {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", try_from = "RawManualDossier")]
 pub struct ManualDossier {
-    pub id: String,
-    pub name: String,
-    pub sources: Vec<SourceId>,
+    // Private fields: the only ways to obtain a `ManualDossier` are the checked
+    // constructor and the validating serde `TryFrom` path, so an invalid id
+    // (e.g. `dyn-*`) can never be built — not even by an in-process Rust caller
+    // (an external `ManualDossier { id: .. }` literal does not compile).
+    id: String,
+    name: String,
+    sources: Vec<SourceId>,
 }
 
 impl ManualDossier {
@@ -192,6 +196,21 @@ impl ManualDossier {
             name: name.into(),
             sources,
         })
+    }
+
+    /// Read-only accessor for the dossier id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Read-only accessor for the dossier name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Read-only accessor for the dossier's source ids.
+    pub fn sources(&self) -> &[SourceId] {
+        &self.sources
     }
 
     /// Render this canonical manual dossier as a (Manual) view entry.
@@ -538,8 +557,12 @@ mod tests {
         // every source referenced by a manual dossier exists in the sources.
         let known: Vec<&SourceId> = a.sources.iter().map(|s| &s.id).collect();
         for dossier in &a.manual_dossiers {
-            for sid in &dossier.sources {
-                assert!(known.contains(&sid), "unknown source id in {}", dossier.id);
+            for sid in dossier.sources() {
+                assert!(
+                    known.contains(&sid),
+                    "unknown source id in {}",
+                    dossier.id()
+                );
             }
         }
     }
