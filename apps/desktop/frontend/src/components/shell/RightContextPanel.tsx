@@ -1,16 +1,21 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TabButton } from "../ui";
-import { SourceCard, ExcerptCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
+import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import {
   workspaceView,
-  excerpts,
   reasoningSteps,
   genealogyNodes,
   memoryItems,
   agentActivity,
 } from "../../mock/data";
-import { SOURCE_TYPE_LABEL, type WorkspaceView } from "../../domain/types";
+import {
+  SOURCE_TYPE_LABEL,
+  type WorkspaceView,
+  type Excerpt,
+  type Citation,
+  type SourceRef,
+} from "../../domain/types";
 
 type TabId = "sources" | "excerpts" | "reasoning" | "memory" | "genealogy" | "agent";
 
@@ -19,14 +24,51 @@ const GROUPS: { label: string; tabs: TabId[] }[] = [
   { label: "tabs.groupContext", tabs: ["memory", "genealogy", "agent"] },
 ];
 
-// Counts for the static (#3 mock) tabs; the Sources count is derived from the
-// active workspace view at render time.
+// Counts for the static (#3 mock) tabs; sources and excerpts counts are derived
+// from the active workspace at render time.
 const STATIC_COUNTS: Partial<Record<TabId, number>> = {
-  excerpts: excerpts.length,
   reasoning: reasoningSteps.length,
   memory: memoryItems.length,
   agent: agentActivity.length,
 };
+
+// Estratti tab (#8): real Estratti of the OPEN workspace (no mock fallback).
+// Shows the verbatim quote, its Ancora, the Fonte it belongs to, and the
+// Citazioni that cite it. Empty state when nothing is open or no excerpts.
+function ExcerptsTab({
+  excerpts,
+  citations,
+  sources,
+}: {
+  excerpts: Excerpt[];
+  citations: Citation[];
+  sources: SourceRef[];
+}) {
+  const { t } = useTranslation();
+  if (excerpts.length === 0) {
+    return <p className="text-sm text-muted">{t("empty.excerpts")}</p>;
+  }
+  const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
+  return (
+    <div className="space-y-3">
+      {excerpts.map((ex) => (
+        <div key={ex.id} className="rounded border border-hairline bg-panel p-2">
+          <div className="font-mono text-[10px] uppercase tracking-wide text-muted">
+            {sourceTitle(ex.sourceId)} · {ex.anchor.kind} {ex.anchor.value}
+          </div>
+          <blockquote className="mt-1 border-l-2 border-hairline pl-2 text-sm">“{ex.quote}”</blockquote>
+          {citations
+            .filter((c) => c.excerptId === ex.id)
+            .map((c) => (
+              <div key={c.id} className="mt-1 text-xs text-muted">
+                ↳ {c.claim}
+              </div>
+            ))}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // Sources tab (slice #5A): the matter's Fonti grouped by typed Fascicolo views —
 // dynamic dossiers (by SourceType) + a manual one. Demonstrates the domain model
@@ -143,9 +185,13 @@ export function RightContextPanel({
   const [selected, setSelected] = useState<string | null>(null);
 
   const view = workspace ?? workspaceView;
+  // #8: Estratti/Citazioni come ONLY from a real open workspace — no mock fallback.
+  const realExcerpts = workspace?.excerpts ?? [];
+  const realCitations = workspace?.citations ?? [];
   const counts: Partial<Record<TabId, number>> = {
     ...STATIC_COUNTS,
     sources: view.sources.length,
+    excerpts: realExcerpts.length,
   };
 
   return (
@@ -185,7 +231,13 @@ export function RightContextPanel({
             importError={importError}
           />
         )}
-        {tab === "excerpts" && excerpts.map((excerpt) => <ExcerptCard key={excerpt.id} excerpt={excerpt} />)}
+        {tab === "excerpts" && (
+          <ExcerptsTab
+            excerpts={realExcerpts}
+            citations={realCitations}
+            sources={workspace?.sources ?? []}
+          />
+        )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}
         {tab === "memory" &&
           memoryItems.map((item) => (
