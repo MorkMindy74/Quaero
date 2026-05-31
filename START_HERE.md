@@ -8,12 +8,13 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3 e #5A COMPLETATE e mergiate in `main`.** Prossimo step: **#5B** (persistenza locale / create / open / search).
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`7bbc694`**.
+- Fase: **#2, #3, #5A e #5B COMPLETATE e mergiate in `main`.** #5B ha aggiunto la **persistenza locale** (create/open/search). Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`e236449`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
-- **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata** (commit `7bbc694`). **Issue #5 resta APERTA** per #5B.
-- Test su `main`: **26 unit + 8 integration** (Rust) + **12 frontend**; CI verde.
+- **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
+- **#5B** persistenza locale JSON del `Workspace` (create/open/search): helper puri in `quaero-core::persistence` + store desktop (`store.rs`, `std::fs`) + 3 comandi IPC + wrapper TS tipizzati. **PR #22 mergiata** (commit `e236449`). **Issue #5 resta APERTA** (PR con `Refs #5`).
+- Test su `main`: **57 Rust** (31 unit core + 8 integration + 18 store desktop) + **16 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -42,6 +43,23 @@ Il modello vive in `quaero-core::domain` (puro, Tauri-free). Invarianti imposti 
 
 *(Consolidato dopo un loop di review avversariale Codex a 7 giri; verdetto finale `approve`.)*
 
+## Contratto di persistenza locale (#5B, consolidato)
+
+La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazione, nessun I/O) + uno store nel crate desktop (`apps/desktop/src-tauri/src/store.rs`, I/O `std::fs`). **PR #22 mergiata** (commit `e236449`).
+
+- **Solo `Workspace` canonico** viene salvato: la firma del writer accetta `&Workspace`, mai `WorkspaceView`; i **fascicoli dinamici non sono mai persistiti**.
+- **Caricamento sempre validato**: `from_json` → `serde_json::from_str::<Workspace>` → `RawWorkspace`/`TryFrom` (integrità referenziale, rifiuto `dyn-`, `deny_unknown_fields` su uno `dossiers` fantasma).
+- **Un file JSON per Pratica** in `app_data_dir()/workspaces/<id>.json` (fuori dal repo).
+- **`create` esclusiva e atomica**: temp file **unico** + `fs::hard_link` (fallisce se la destinazione esiste) → tra create concorrenti **esattamente una vince** (`AlreadyExists` per le altre); **cleanup del temp incondizionato** (write/publish fallite o successo).
+- **Path safety**: id `[A-Za-z0-9_-]`, niente `..`/`/`/`\`; **`file_stem == matter.id`** imposto in load (`open` rifiuta gli incoerenti, `search` li salta).
+- **`search` minima**: lista su metadati (nome cliente / titolo pratica), substring case-insensitive, query vuota = tutte; niente indici/full-text/ranking/semantica.
+- **`open`** ritorna la `WorkspaceView` derivata (dinamici ricalcolati); il canonico resta la fonte di verità.
+- **IPC**: 3 comandi sottili `Result<_, String>` (niente panic). **Nessuna nuova capability Tauri** (`core:default`), **nessun `tauri-plugin-fs`**.
+
+**Fuori da #5B** (slice/fasi successive): integrazione UI completa di create/open/search; ingestione documenti/Fonti (#6); update/delete; cifratura at-rest; migrazioni di schema; locking multi-processo; ricerca full-text/semantica; genealogia reale (#15).
+
+*(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER `create` concorrente + SHOULD FIX `search`/file ostili + SHOULD FIX cleanup temp — tutti risolti; verdetto finale senza BLOCKER né SHOULD FIX.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -68,7 +86,7 @@ Il modello vive in `quaero-core::domain` (puro, Tauri-free). Invarianti imposti 
 | #2  | ✅ Scheletro app (Tauri ↔ Rust) + i18n IT/EN | AFK | — |
 | #3  | ✅ Design language "wow" + cockpit shell + component kit | HITL | #2 |
 | #4  | Installer "wow" + login semplice | HITL | #2 |
-| #5  | 🟡 Pratiche (Cliente→Pratica→Fascicolo) — **#5A ✅ dominio mergiato; #5B ⏳ persistenza/create/open/search** | AFK | #2, #3 |
+| #5  | 🟡 Pratiche (Cliente→Pratica→Fascicolo) — **#5A ✅ dominio; #5B ✅ persistenza create/open/search mergiati**; restano UI completa + ingestione | AFK | #2, #3 |
 | #6  | Allega & ingerisci documento + Evidence | AFK | #5 |
 | #7  | Chat che risponde (senza citazioni) | AFK | #6 |
 | #8  | Citazioni ad Estratti + clic→evidenzia | AFK | #7 |
@@ -89,11 +107,11 @@ Il modello vive in `quaero-core::domain` (puro, Tauri-free). Invarianti imposti 
 
 ## Prossima sessione
 
-**#2, #3, #5A completate e mergiate.** Prossimo step: **#5B** — persistenza locale / create / open / search (issue **#5**, ancora aperta), che costruirà sul **contratto di dominio canonico** consolidato in #5A (vedi sezione sopra).
+**#2, #3, #5A e #5B completate e mergiate.** La issue **#5** resta **aperta**: il dominio (#5A) e la persistenza locale (#5B) ci sono, ma restano da cablare la **UI completa** delle Pratiche (create/open/search) e l'**ingestione delle Fonti** (#6). Prossimo step da decidere insieme.
 
-Per sviluppare #5B: leggere questo file, aprire la issue (`gh issue view 5 --comments`), confermare il piano, poi `/mattpocock-skills:tdd 5` su un branch dedicato `slice/5b-...`.
+Candidati naturali: completare il **cablaggio UI** di create/open/search su #5B; oppure **#6** (allega & ingerisci documento + Evidence), che apre la spina dorsale #6→#8. Restano anche **#4 Installer** (HITL) e #9→#15.
 
-*(Restano anche, quando deciso: #4 Installer (HITL); #6→#15 spina dorsale del valore.)*
+Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
 **Ambiente (Windows):** i comandi `cargo` richiedono l'ambiente VS Build Tools caricato — usare la **"x64 Native Tools Command Prompt for VS 2022"** oppure caricare `vcvars64.bat` (`...\BuildTools\VC\Auxiliary\Build\vcvars64.bat`), altrimenti il linker MSVC non è nel PATH. Verifica rapida:
 

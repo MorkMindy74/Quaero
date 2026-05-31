@@ -15,7 +15,7 @@ Il singolo incarico professionale (es. "Recupero credito verso Gamma S.r.l.", "O
 _Avoid_: caso, matter
 
 **Fascicolo**:
-Una **vista organizzativa** sulle Fonti di una Pratica — non un contenitore fisico esclusivo. Una stessa Fonte può comparire in più Fascicoli senza essere duplicata (molti-a-molti). Un Fascicolo può essere **dinamico** (generato dal sistema, uno per Tipo di Fonte: Documenti, Norme, Giurisprudenza, Dottrina, Prassi, Dati, Note, Memoria, Fonti esterne) o **manuale** (creato e curato dall'utente: es. Produzione avversaria, Atti processuali, Compliance, Strategia, Bozze, Due diligence). I Fascicoli **dinamici** sono **viste derivate**, ricalcolate dalle Fonti e mai salvate come stato canonico; i **manuali** sono stato canonico curato dall'utente. *(Modellato in #5A: stato canonico vs vista derivata — vedi `START_HERE.md`.)*
+Una **vista organizzativa** sulle Fonti di una Pratica — non un contenitore fisico esclusivo. Una stessa Fonte può comparire in più Fascicoli senza essere duplicata (molti-a-molti). Un Fascicolo può essere **dinamico** (generato dal sistema, uno per Tipo di Fonte: Documenti, Norme, Giurisprudenza, Dottrina, Prassi, Dati, Note, Memoria, Fonti esterne) o **manuale** (creato e curato dall'utente: es. Produzione avversaria, Atti processuali, Compliance, Strategia, Bozze, Due diligence). I Fascicoli **dinamici** sono **viste derivate**, ricalcolate dalle Fonti e mai salvate come stato canonico; i **manuali** sono stato canonico curato dall'utente. *(Modellato in #5A: stato canonico vs vista derivata; in #5B viene **persistito solo il canonico** — i dinamici non si salvano. Vedi `START_HERE.md`.)*
 _Avoid_: cartella, faldone, folder, scatola, contenitore
 
 ## Fonti
