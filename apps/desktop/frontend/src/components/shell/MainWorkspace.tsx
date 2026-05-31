@@ -5,6 +5,7 @@ import { Panel } from "../ui";
 import { ReasoningStep, GenealogyPreview } from "../cards";
 import { DraftDocument } from "../workspace/DraftDocument";
 import { DraftMetaRail } from "../workspace/DraftMetaRail";
+import { ChatPanel } from "./ChatPanel";
 import { reasoningSteps, genealogyNodes, type MockMatter } from "../../mock/data";
 
 interface MainWorkspaceProps {
@@ -80,9 +81,5 @@ function ModeSurface({ mode }: { mode: ModeId }) {
       </div>
     );
   }
-  return (
-    <div data-testid="surface-conversation" className="grid h-full place-items-center text-center text-muted">
-      <p className="text-sm">{t("conversation.grounded", { count: 3 })}</p>
-    </div>
-  );
+  return <ChatPanel />;
 }
