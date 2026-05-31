@@ -8,6 +8,7 @@ pub mod chat;
 pub mod domain;
 pub mod hash;
 pub mod persistence;
+pub mod privacy;
 pub mod verify;
 
 use serde::{Deserialize, Serialize};
