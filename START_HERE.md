@@ -8,8 +8,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3, #5 (#5A/#5B/#5C) e #6 COMPLETATE e mergiate in `main`.** Le **issue #5 e #6 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`0d83ee5`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6 e #7 COMPLETATE e mergiate in `main`.** Le **issue #5, #6 e #7 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`3ef2557`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
@@ -17,7 +17,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - **#5C** UI minima collegata a create/open/search (**frontend-only**): lista Pratiche da `searchWorkspaces`, dialog "+ Nuova Pratica" → `createWorkspace`, apertura → `openWorkspace` nel pannello Sources; `slug()` per gli id; stati loading/error/empty. **PR #24 mergiata** (commit `fdd36ef`). Backend/IPC/filesystem/capability **non toccati**; Codex review non necessaria (frontend-only).
 - **Issue #5 CHIUSA**: completata end-to-end con **#5A** (dominio canonico) + **#5B** (persistenza) + **#5C** (UI wiring). L'unificazione mock↔reale di TopCommandBar/MainWorkspace resta un **refinement UI futuro**, non parte dello scope di #5.
 - **#6** ingestione documenti / Evidence v1: import di un file locale come **Fonte Documento**, byte in `app_data/files/<matterId>/`, registrazione canonica **`SourceRef + StoredFile`** (`storedName`/`originalName`/`byteLen`/`sha256`), byte **fuori** dal JSON, pubblicazione blob **esclusiva** (no overwrite), path safety, UI minima. **PR #26 mergiata** (commit `0d83ee5`). **Issue #6 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità blob) → fix → giro 2 `approve-with-notes` (nessun BLOCKER/SHOULD FIX residuo).
-- Test su `main`: **75 Rust** (39 unit core + 8 integration + 28 store desktop) + **34 frontend**; CI verde.
+- **#7** chat controllata **stub-only offline**: pipeline UI → IPC → Rust → `ChatProvider` → `StubProvider` deterministico; **nessuna rete/API key/LLM reale/persistenza/accesso documenti/Evidence/citazioni**; isolamento per-Pratica (cambio Pratica → chat azzerata); risposte marcate "esplorativa · non verificata · senza citazioni · non parere legale" (ADR-0007). **PR #28 mergiata** (commit `3ef2557`). **Issue #7 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER isolamento per-Pratica) → fix → giro 2 `approve`.
+- Test su `main`: **80 Rust** (44 unit core + 8 integration + 28 store desktop) + **39 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -81,6 +82,19 @@ L'import vive nel core (`quaero-core`: `StoredFile`, `SourceRef.file`, `Workspac
 
 *(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER integrità blob — overwrite su collisione id — risolto con pubblicazione esclusiva + rigenerazione; verdetto finale `approve-with-notes`, size-cap/DoS accettato come CAN WAIT fuori scope.)*
 
+## Chat controllata (#7, consolidato)
+
+La chat vive nella surface "Conversazione" via pipeline **UI → IPC → Rust → `ChatProvider`**. **PR #28 mergiata** (commit `3ef2557`).
+
+- **`StubProvider` deterministico e offline** (in `quaero-core::chat`): stesso input → stesso output; **nessun LLM reale, rete, API key, segreto, accesso file, persistenza**. Comando IPC `chat_send` (`Result<_, String>`, `deny_unknown_fields`, cap lunghezza prompt).
+- **Non-fondata per costruzione**: `grounded` sempre `false`, nessuna citazione; la UI mostra un **disclaimer permanente** + etichetta per-risposta "non verificata · senza citazioni · non parere legale" → ADR-0007 preservato (le Citazioni reali arrivano in #8).
+- **Isolamento per-Pratica**: `ChatPanel` è keyato per `matter.id` → cambiando Pratica la chat si azzera; nessun bleed tra clienti. Chat **in-memory** (non persistita).
+- **Nessuna nuova capability/plugin** (`core:default`).
+
+**Fuori da #7** (slice futura dedicata, con preflight + Codex obbligatoria): **provider LLM reale** (locale/remoto) dietro `ChatProvider`, rete, API key/segreti, consenso utente, persistenza messaggi, memoria lunga, streaming, **grounding/Citazioni (#8)**.
+
+*(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER isolamento per-Pratica risolto con remount keyato per `matter.id`; verdetto finale `approve`.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -109,7 +123,7 @@ L'import vive nel core (`quaero-core`: `StoredFile`, `SourceRef.file`, `Workspac
 | #4  | Installer "wow" + login semplice | HITL | #2 |
 | #5  | ✅ **CHIUSA** — Pratiche (Cliente→Pratica→Fascicolo): #5A dominio + #5B persistenza + #5C UI wiring (create/open/search). Unificazione mock↔reale = refinement UI futuro | AFK | #2, #3 |
 | #6  | ✅ **CHIUSA** — Allega & ingerisci documento + Evidence (import→Fonte Documento + `sha256`; byte fuori JSON; pubblicazione esclusiva). Chunked import = slice futura | AFK | #5 |
-| #7  | Chat che risponde (senza citazioni) | AFK | #6 |
+| #7  | ✅ **CHIUSA** — Chat che risponde (senza citazioni): pipeline UI→IPC→Rust→ChatProvider→StubProvider offline; isolamento per-Pratica. Provider reale = slice futura | AFK | #6 |
 | #8  | Citazioni ad Estratti + clic→evidenzia | AFK | #7 |
 | #9  | Verificatore citazioni | AFK | #8 |
 | #10 | Privacy guard | AFK | #8 |
@@ -128,9 +142,9 @@ L'import vive nel core (`quaero-core`: `StoredFile`, `SourceRef.file`, `Workspac
 
 ## Prossima sessione
 
-**#2, #3, l'intera #5 e #6 completate e mergiate; issue #5 e #6 CHIUSE.** Le Pratiche sono operative end-to-end e i documenti si importano come Fonti (Evidence v1, con `sha256`). Prossimo step da decidere insieme.
+**#2, #3, l'intera #5, #6 e #7 completate e mergiate; issue #5, #6 e #7 CHIUSE.** Pratiche operative end-to-end, documenti importati come Fonti (Evidence v1 con `sha256`), chat controllata stub-only offline. Prossimo step da decidere insieme.
 
-Candidati naturali: **#7** (chat che risponde, senza citazioni), ora sbloccata da #6, verso la spina dorsale #7→#8 (Citazioni ad Estratti); oppure le slice di rinforzo già individuate — **`chunked document import`** (robustezza payload IPC), **UI refinement** mock↔reale (TopCommandBar/MainWorkspace). Restano anche **#4 Installer** (HITL) e #9→#15.
+Candidati naturali: **#8** (Citazioni ad Estratti + clic→evidenzia) — il cuore anti-allucinazione, che sblocca #9 (Verificatore) e #11 (Redazione); oppure le slice di rinforzo — **provider LLM reale** dietro `ChatProvider` (preflight + Codex obbligatoria), **`chunked document import`** (robustezza payload IPC), **UI refinement** mock↔reale. Restano anche **#4 Installer** (HITL) e #9→#15.
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
