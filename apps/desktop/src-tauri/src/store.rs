@@ -20,7 +20,7 @@
 //! - `open` is strict (corrupt/inconsistent files error); `search` is tolerant
 //!   (skips them).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -336,6 +336,30 @@ pub fn import_document(
     original_name: &str,
     bytes: &[u8],
 ) -> Result<WorkspaceView, StoreError> {
+    import_document_with(
+        workspaces_dir,
+        files_dir,
+        matter_id,
+        original_name,
+        bytes,
+        &mut || new_source_id(),
+    )
+}
+
+/// Core of [`import_document`] with an injectable id generator (for tests that
+/// force id collisions). Blob publication is **exclusive** (`hard_link`, never
+/// overwrite): a candidate id that collides with an existing source in the
+/// loaded workspace, or with an existing blob on disk, triggers regeneration —
+/// so an existing client document's bytes are never replaced, keeping the
+/// persisted `sha256`/`byteLen` consistent with the physical file.
+fn import_document_with(
+    workspaces_dir: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    original_name: &str,
+    bytes: &[u8],
+    gen_id: &mut dyn FnMut() -> String,
+) -> Result<WorkspaceView, StoreError> {
     if bytes.len() as u64 > MAX_IMPORT_BYTES {
         return Err(StoreError::TooLarge {
             limit: MAX_IMPORT_BYTES,
@@ -357,24 +381,50 @@ pub fn import_document(
     }
     let workspace = load_consistent(&ws_path)?;
 
-    // Generated, safe names — never derived from `original_name`.
-    let source_id = new_source_id();
-    let ext = safe_extension(original_name);
-    let stored_name = format!("{source_id}.{ext}");
+    let ext = safe_extension(original_name); // safe; never a path
     let sha256 = sha256_hex(bytes);
-
-    // 1) Write the blob atomically under files/<matter>/<stored_name>.
     let matter_dir = files_dir.join(&matter_stem);
     fs::create_dir_all(&matter_dir)?;
-    let blob_path = matter_dir.join(&stored_name);
-    let tmp = unique_tmp(&matter_dir, &source_id);
-    fs::write(&tmp, bytes)?;
-    if let Err(e) = fs::rename(&tmp, &blob_path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e.into());
-    }
 
-    // 2) Register the canonical SourceRef and update the JSON.
+    // Ids already taken by this workspace — a candidate matching one would be
+    // rejected by `with_source`, so we skip it before writing any bytes.
+    let taken: HashSet<String> = workspace.sources().iter().map(|s| s.id.0.clone()).collect();
+
+    // Allocate a unique id and publish the blob EXCLUSIVELY (no overwrite).
+    let mut attempts = 0u32;
+    let (source_id, stored_name) = loop {
+        attempts += 1;
+        if attempts > 1000 {
+            return Err(StoreError::Io(
+                "could not allocate a unique source id".to_string(),
+            ));
+        }
+        let candidate = gen_id();
+        // never accept an unsafe generated id, and never reuse a workspace id
+        if safe_file_stem(&candidate).is_err() || taken.contains(&candidate) {
+            continue;
+        }
+        let stored_name = format!("{candidate}.{ext}");
+        let blob_path = matter_dir.join(&stored_name);
+        let tmp = unique_tmp(&matter_dir, &candidate);
+        match write_and_publish(&tmp, &blob_path, bytes, &candidate) {
+            Ok(()) => {
+                let _ = fs::remove_file(&tmp);
+                break (candidate, stored_name);
+            }
+            // blob path already exists (e.g. an orphan): regenerate, never overwrite
+            Err(StoreError::AlreadyExists(_)) => {
+                let _ = fs::remove_file(&tmp);
+                continue;
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
+    };
+
+    // Register the canonical SourceRef and update the JSON (blob already on disk).
     let source = SourceRef {
         id: SourceId::new(source_id),
         kind: SourceType::Documento,
@@ -894,5 +944,108 @@ mod tests {
             .filter(|s| matches!(s.kind, SourceType::Documento))
             .count();
         assert_eq!(docs, 8);
+    }
+
+    /// Read a blob and assert the SourceRef metadata matches the physical bytes.
+    fn assert_blob_integrity(files: &Path, matter: &str, f: &StoredFile, expected: &[u8]) {
+        let blob = files.join(matter).join(&f.stored_name);
+        let raw = fs::read(&blob).unwrap();
+        assert_eq!(raw, expected);
+        assert_eq!(f.byte_len as usize, raw.len());
+        assert_eq!(f.sha256, sha256_hex(&raw));
+    }
+
+    #[test]
+    fn id_collision_with_existing_source_regenerates_without_touching_old_blob() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(&ws, client("alfa", "Alfa"), matter("rossi", "alfa", "R")).unwrap();
+
+        // first import pinned to a fixed id
+        import_document_with(&ws, &files, "rossi", "a.txt", b"first", &mut || {
+            "dup-id".to_string()
+        })
+        .unwrap();
+        let old_blob = files.join("rossi").join("dup-id.txt");
+        assert_eq!(fs::read(&old_blob).unwrap(), b"first");
+
+        // second import: gen yields the colliding id first, then a free one
+        let mut seq = vec!["fresh-id".to_string(), "dup-id".to_string()];
+        let view = import_document_with(&ws, &files, "rossi", "b.txt", b"second", &mut move || {
+            seq.pop().unwrap()
+        })
+        .unwrap();
+
+        // the old blob is untouched; the new one used the regenerated id
+        assert_eq!(fs::read(&old_blob).unwrap(), b"first");
+        assert_eq!(
+            fs::read(files.join("rossi").join("fresh-id.txt")).unwrap(),
+            b"second"
+        );
+
+        // both sources persisted, each consistent with its physical bytes
+        let docs: Vec<_> = view
+            .sources
+            .iter()
+            .filter_map(|s| s.file.as_ref())
+            .collect();
+        assert_eq!(docs.len(), 2);
+        let by_name = |n: &str| docs.iter().find(|f| f.stored_name == n).unwrap();
+        assert_blob_integrity(&files, "rossi", by_name("dup-id.txt"), b"first");
+        assert_blob_integrity(&files, "rossi", by_name("fresh-id.txt"), b"second");
+    }
+
+    #[test]
+    fn blob_path_collision_with_orphan_regenerates_without_overwrite() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(&ws, client("alfa", "Alfa"), matter("rossi", "alfa", "R")).unwrap();
+
+        // an orphan blob on disk, not referenced by the workspace
+        fs::create_dir_all(files.join("rossi")).unwrap();
+        let orphan = files.join("rossi").join("orphan-id.bin");
+        fs::write(&orphan, b"orphan").unwrap();
+
+        // gen yields the orphan-colliding id first (no dot in name → ext "bin"),
+        // then a free id
+        let mut seq = vec!["good-id".to_string(), "orphan-id".to_string()];
+        let view = import_document_with(&ws, &files, "rossi", "data", b"new", &mut move || {
+            seq.pop().unwrap()
+        })
+        .unwrap();
+
+        // exclusive publish never overwrote the orphan
+        assert_eq!(fs::read(&orphan).unwrap(), b"orphan");
+        let f = view.sources.iter().find_map(|s| s.file.as_ref()).unwrap();
+        assert_eq!(f.stored_name, "good-id.bin");
+        assert_blob_integrity(&files, "rossi", f, b"new");
+    }
+
+    #[test]
+    fn unresolvable_id_collision_fails_controlled_and_keeps_old_blob() {
+        let tmp = tempdir().unwrap();
+        let (ws, files) = dirs(tmp.path());
+        create(&ws, client("alfa", "Alfa"), matter("rossi", "alfa", "R")).unwrap();
+
+        import_document_with(&ws, &files, "rossi", "a.txt", b"first", &mut || {
+            "stuck-id".to_string()
+        })
+        .unwrap();
+        let blob = files.join("rossi").join("stuck-id.txt");
+
+        // a generator that always collides → controlled error, never overwrite
+        let r = import_document_with(&ws, &files, "rossi", "b.txt", b"second", &mut || {
+            "stuck-id".to_string()
+        });
+        assert!(matches!(r, Err(StoreError::Io(_))));
+        assert_eq!(fs::read(&blob).unwrap(), b"first");
+        // the workspace still has exactly one imported source
+        let n = open(&ws, "rossi")
+            .unwrap()
+            .sources
+            .iter()
+            .filter(|s| s.file.is_some())
+            .count();
+        assert_eq!(n, 1);
     }
 }
