@@ -91,7 +91,6 @@ export interface MockNormativeGenealogy {
   norma: string;
   status: string;
   timeline: MockNormativeVersion[];
-  alert: string;
   linkedSources: string[];
 }
 
@@ -104,7 +103,6 @@ export const normativeGenealogy: MockNormativeGenealogy = {
     { id: "nv2", date: "1985", label: "modifica", current: false },
     { id: "nv3", date: "oggi", label: "vigente", current: true },
   ],
-  alert: "Nessuna modifica nota negli ultimi 12 mesi (mock).",
   linkedSources: ["Art. 1175 c.c.", "Cass. civ. 12345/2024"],
 };
 

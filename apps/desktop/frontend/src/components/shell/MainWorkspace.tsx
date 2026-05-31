@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { ModeSwitcher, type ModeId } from "./ModeSwitcher";
 import { Panel } from "../ui";
 import { ReasoningStep, GenealogyPreview } from "../cards";
+import { DraftDocument } from "../workspace/DraftDocument";
+import { DraftMetaRail } from "../workspace/DraftMetaRail";
 import { reasoningSteps, genealogyNodes, type MockMatter } from "../../mock/data";
 
 interface MainWorkspaceProps {
@@ -72,11 +74,10 @@ function ModeSurface({ mode }: { mode: ModeId }) {
   }
   if (mode === "drafting") {
     return (
-      <Panel parchment title={t("modes.drafting")}>
-        <div data-testid="surface-drafting" className="text-sm text-muted">
-          — bozza (placeholder) · sigillo AI / umano —
-        </div>
-      </Panel>
+      <div data-testid="surface-drafting" className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <DraftDocument />
+        <DraftMetaRail />
+      </div>
     );
   }
   return (

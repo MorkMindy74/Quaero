@@ -54,6 +54,14 @@ test("the mode switcher swaps the workspace surface", () => {
   expect(screen.getByTestId("surface-reasoning")).toBeInTheDocument();
 });
 
+test("the drafting mode shows the unvalidated draft surface", () => {
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "Redazione" }));
+  expect(screen.getByTestId("surface-drafting")).toBeInTheDocument();
+  expect(screen.getByText("Comparsa di costituzione e risposta")).toBeInTheDocument();
+  expect(screen.getByText("BOZZA NON VALIDATA")).toBeInTheDocument();
+});
+
 test("the command palette stub opens from the ⌘K trigger", () => {
   render(<App />);
   fireEvent.click(screen.getByText("⌘K"));
@@ -62,7 +70,7 @@ test("the command palette stub opens from the ⌘K trigger", () => {
 
 test("the status strip shows the local/privacy signal", () => {
   render(<App />);
-  expect(within(screen.getByTestId("region-status")).getByText("local & private")).toBeInTheDocument();
+  expect(within(screen.getByTestId("region-status")).getByText("Locale e privato")).toBeInTheDocument();
 });
 
 test("language toggle switches Italian to English (regression from #2)", async () => {
@@ -75,6 +83,6 @@ test("language toggle switches Italian to English (regression from #2)", async (
 test("ping round-trip still works, surfaced as connectivity (regression from #2)", async () => {
   render(<App />);
   await waitFor(() =>
-    expect(screen.getByTestId("status-connectivity")).toHaveTextContent("core: ok"),
+    expect(screen.getByTestId("status-connectivity")).toHaveTextContent("Core attivo"),
   );
 });

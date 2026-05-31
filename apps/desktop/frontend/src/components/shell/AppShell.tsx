@@ -27,12 +27,12 @@ export default function AppShell() {
   return (
     <div className="grid h-screen grid-rows-[auto_minmax(0,1fr)_auto] bg-background text-ink">
       <TopCommandBar matter={matter} onSelectMatter={setMatter} onOpenPalette={() => setPaletteOpen(true)} />
-      <div className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)_360px]">
+      <div className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)_348px]">
         <LeftSidebar matter={matter} onSelectMatter={setMatter} />
         <MainWorkspace matter={matter} />
         <RightContextPanel />
       </div>
-      <StatusStrip matter={matter} />
+      <StatusStrip />
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </div>
   );

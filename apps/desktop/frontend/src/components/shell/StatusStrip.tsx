@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ping } from "../../lib/ipc";
-import type { MockMatter } from "../../mock/data";
 
-interface StatusStripProps {
-  matter: MockMatter | null;
-}
-
-// Spec §3 comp 14: quiet instrumentation; carries the privacy signal.
-// Also the home of the #2 ping round-trip, surfaced as a connectivity check.
-export function StatusStrip({ matter }: StatusStripProps) {
+// Spec §3 comp 14 (v0.3): the intentional home of operational status. Sober,
+// mono, readable. Also surfaces the #2 ping round-trip as core connectivity.
+export function StatusStrip() {
   const { t } = useTranslation();
   const [core, setCore] = useState<"checking" | "ok" | "err">("checking");
 
@@ -28,21 +23,26 @@ export function StatusStrip({ matter }: StatusStripProps) {
     };
   }, []);
 
+  const sep = <span className="text-hairline">·</span>;
+
   return (
     <footer
       data-testid="region-status"
       role="contentinfo"
-      className="flex items-center gap-4 border-t border-hairline bg-panel px-4 py-1 font-mono text-[11px] text-muted"
+      className="flex items-center gap-3 border-t border-hairline bg-panel px-4 py-1.5 font-mono text-[11px] text-muted"
     >
-      <span className="inline-flex items-center gap-1 text-accent-verified">
+      <span className="inline-flex items-center gap-1.5 text-accent-verified">
         <span className="h-2 w-2 rounded-full bg-accent-verified" /> {t("status.localPrivate")}
       </span>
-      <span>{t("status.index")} 100%</span>
-      <span>{matter ? t("status.matterOpen") : t("status.noMatter")}</span>
-      <span>{t("status.citations")} 6/6</span>
-      <span data-testid="status-connectivity" className="ml-auto">
-        {core === "ok" ? t("status.coreOk") : core === "err" ? t("status.coreErr") : "…"}
+      {sep}
+      <span data-testid="status-connectivity">
+        {core === "ok" ? t("status.coreActive") : core === "err" ? t("status.coreErr") : "…"}
       </span>
+      {sep}
+      <span>{t("status.sourcesVerified")}</span>
+      {sep}
+      <span className="text-accent-warning">{t("status.timeCheck")}</span>
+      <span className="ml-auto">{t("status.indexing")}</span>
     </footer>
   );
 }
