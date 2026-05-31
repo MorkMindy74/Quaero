@@ -97,6 +97,7 @@ impl SourceType {
 
 /// A subject (Cliente) for whom matters are handled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Client {
     pub id: ClientId,
     pub name: String,
@@ -104,6 +105,7 @@ pub struct Client {
 
 /// A single professional engagement (Pratica) belonging to a Client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Matter {
     pub id: MatterId,
     pub client: ClientId,
@@ -113,6 +115,7 @@ pub struct Matter {
 
 /// A minimal citable reference (Fonte). Not yet an Estratto/Ancora.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceRef {
     pub id: SourceId,
     pub kind: SourceType,
@@ -137,12 +140,36 @@ pub struct DossierView {
     pub sources: Vec<SourceId>,
 }
 
+/// Reserved id prefix for **generated dynamic** dossiers. Manual dossiers may
+/// never use it, so dynamic and manual views can't collide on id.
+pub const DYNAMIC_DOSSIER_PREFIX: &str = "dyn-";
+
+/// Error constructing a canonical [`ManualDossier`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManualDossierError {
+    /// The id uses the reserved `dyn-` prefix of generated dynamic dossiers.
+    ReservedDynamicPrefix,
+}
+
+impl std::fmt::Display for ManualDossierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ManualDossierError::ReservedDynamicPrefix => write!(
+                f,
+                "manual dossier id must not use the reserved `{DYNAMIC_DOSSIER_PREFIX}` prefix"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ManualDossierError {}
+
 /// **Canonical** manual Fascicolo. By construction it can only be manual — it
 /// has NO `kind`, so a dynamic dossier can never be represented in canonical
-/// state. The boundary is enforced by the type, not by convention.
-/// `deny_unknown_fields` rejects any payload trying to smuggle in a `kind`.
+/// state. Its id may not use the reserved `dyn-` prefix. Both invariants are
+/// enforced on construction AND on deserialization (via `RawManualDossier`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RawManualDossier")]
 pub struct ManualDossier {
     pub id: String,
     pub name: String,
@@ -150,12 +177,21 @@ pub struct ManualDossier {
 }
 
 impl ManualDossier {
-    pub fn new(id: impl Into<String>, name: impl Into<String>, sources: Vec<SourceId>) -> Self {
-        Self {
-            id: id.into(),
+    /// Build a manual dossier, rejecting ids in the reserved `dyn-` namespace.
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        sources: Vec<SourceId>,
+    ) -> Result<Self, ManualDossierError> {
+        let id = id.into();
+        if id.starts_with(DYNAMIC_DOSSIER_PREFIX) {
+            return Err(ManualDossierError::ReservedDynamicPrefix);
+        }
+        Ok(Self {
+            id,
             name: name.into(),
             sources,
-        }
+        })
     }
 
     /// Render this canonical manual dossier as a (Manual) view entry.
@@ -166,6 +202,24 @@ impl ManualDossier {
             kind: DossierKind::Manual,
             sources: self.sources.clone(),
         }
+    }
+}
+
+/// Wire shape for deserializing a [`ManualDossier`]: `deny_unknown_fields`
+/// rejects smuggled fields (e.g. `kind`), then `TryFrom` enforces the id rule.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawManualDossier {
+    id: String,
+    name: String,
+    sources: Vec<SourceId>,
+}
+
+impl TryFrom<RawManualDossier> for ManualDossier {
+    type Error = ManualDossierError;
+
+    fn try_from(raw: RawManualDossier) -> Result<Self, Self::Error> {
+        ManualDossier::new(raw.id, raw.name, raw.sources)
     }
 }
 
@@ -185,7 +239,7 @@ pub fn dynamic_dossiers(sources: &[SourceRef]) -> Vec<DossierView> {
                 None
             } else {
                 Some(DossierView {
-                    id: format!("dyn-{}", kind.slug()),
+                    id: format!("{}{}", DYNAMIC_DOSSIER_PREFIX, kind.slug()),
                     name: kind.dossier_name().to_string(),
                     kind: DossierKind::Dynamic,
                     sources: ids,
@@ -301,7 +355,8 @@ pub fn sample_workspace() -> Workspace {
         "man-produzione-avversaria",
         "Produzione avversaria",
         vec![SourceId::new("s1"), SourceId::new("s3")],
-    )];
+    )
+    .expect("sample manual dossier id is valid")];
 
     Workspace {
         client,
@@ -496,5 +551,64 @@ mod tests {
         let back: Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(ws, back);
         assert!(json.contains("\"rossi-bianchi\""));
+    }
+
+    #[test]
+    fn canonical_workspace_rejects_nested_shadow_view_fields() {
+        // A corrupted/version-skewed file carrying derived view bits inside nested
+        // canonical structs must be rejected, not silently accepted.
+        let payloads = [
+            // client carries a shadow `dossiers`
+            r#"{"client":{"id":"a","name":"A","dossiers":[]},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[],"manualDossiers":[]}"#,
+            // matter carries a shadow `dossiers`
+            r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s","dossiers":[]},"sources":[],"manualDossiers":[]}"#,
+            // a source carries a shadow `dossiers`
+            r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[{"id":"s1","kind":"Documento","title":"t","meta":"","dossiers":[]}],"manualDossiers":[]}"#,
+            // a source carries a shadow `manualDossiers`
+            r#"{"client":{"id":"a","name":"A"},"matter":{"id":"m","client":"a","title":"t","subject":"s"},"sources":[{"id":"s1","kind":"Documento","title":"t","meta":"","manualDossiers":[]}],"manualDossiers":[]}"#,
+        ];
+        for json in payloads {
+            assert!(
+                serde_json::from_str::<Workspace>(json).is_err(),
+                "nested shadow field must be rejected: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_dossier_with_normal_id_is_ok() {
+        assert!(ManualDossier::new("man-x", "X", vec![]).is_ok());
+    }
+
+    #[test]
+    fn manual_dossier_with_reserved_dyn_prefix_is_rejected() {
+        assert_eq!(
+            ManualDossier::new("dyn-documento", "X", vec![]),
+            Err(ManualDossierError::ReservedDynamicPrefix)
+        );
+    }
+
+    #[test]
+    fn deserializing_a_manual_dossier_with_reserved_dyn_prefix_is_rejected() {
+        let json = r#"{
+            "client": {"id":"alfa","name":"Alfa"},
+            "matter": {"id":"m","client":"alfa","title":"t","subject":"s"},
+            "sources": [],
+            "manualDossiers": [{"id":"dyn-documento","name":"X","sources":[]}]
+        }"#;
+        assert!(
+            serde_json::from_str::<Workspace>(json).is_err(),
+            "a loaded manual dossier must not use the reserved dyn- prefix"
+        );
+    }
+
+    #[test]
+    fn view_dossier_ids_are_unique_no_dynamic_manual_collision() {
+        let view = sample_workspace().view();
+        let total = view.dossiers.len();
+        let mut ids: Vec<&str> = view.dossiers.iter().map(|d| d.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "dossier view ids must be unique");
     }
 }
