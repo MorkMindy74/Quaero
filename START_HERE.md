@@ -8,13 +8,15 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3, #5A e #5B COMPLETATE e mergiate in `main`.** #5B ha aggiunto la **persistenza locale** (create/open/search). Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`e236449`**.
+- Fase: **#2, #3, #5A, #5B e #5C COMPLETATE e mergiate in `main`.** La **issue #5 è CHIUSA**: Pratiche (crea/apri/cerca, locale) completate end-to-end. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`fdd36ef`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
-- **#5B** persistenza locale JSON del `Workspace` (create/open/search): helper puri in `quaero-core::persistence` + store desktop (`store.rs`, `std::fs`) + 3 comandi IPC + wrapper TS tipizzati. **PR #22 mergiata** (commit `e236449`). **Issue #5 resta APERTA** (PR con `Refs #5`).
-- Test su `main`: **57 Rust** (31 unit core + 8 integration + 18 store desktop) + **16 frontend**; CI verde.
+- **#5B** persistenza locale JSON del `Workspace` (create/open/search): helper puri in `quaero-core::persistence` + store desktop (`store.rs`, `std::fs`) + 3 comandi IPC + wrapper TS tipizzati. **PR #22 mergiata** (commit `e236449`).
+- **#5C** UI minima collegata a create/open/search (**frontend-only**): lista Pratiche da `searchWorkspaces`, dialog "+ Nuova Pratica" → `createWorkspace`, apertura → `openWorkspace` nel pannello Sources; `slug()` per gli id; stati loading/error/empty. **PR #24 mergiata** (commit `fdd36ef`). Backend/IPC/filesystem/capability **non toccati**; Codex review non necessaria (frontend-only).
+- **Issue #5 CHIUSA**: completata end-to-end con **#5A** (dominio canonico) + **#5B** (persistenza) + **#5C** (UI wiring). L'unificazione mock↔reale di TopCommandBar/MainWorkspace resta un **refinement UI futuro**, non parte dello scope di #5.
+- Test su `main`: **57 Rust** (31 unit core + 8 integration + 18 store desktop) + **31 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -86,7 +88,7 @@ La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazion
 | #2  | ✅ Scheletro app (Tauri ↔ Rust) + i18n IT/EN | AFK | — |
 | #3  | ✅ Design language "wow" + cockpit shell + component kit | HITL | #2 |
 | #4  | Installer "wow" + login semplice | HITL | #2 |
-| #5  | 🟡 Pratiche (Cliente→Pratica→Fascicolo) — **#5A ✅ dominio; #5B ✅ persistenza create/open/search mergiati**; restano UI completa + ingestione | AFK | #2, #3 |
+| #5  | ✅ **CHIUSA** — Pratiche (Cliente→Pratica→Fascicolo): #5A dominio + #5B persistenza + #5C UI wiring (create/open/search). Unificazione mock↔reale = refinement UI futuro | AFK | #2, #3 |
 | #6  | Allega & ingerisci documento + Evidence | AFK | #5 |
 | #7  | Chat che risponde (senza citazioni) | AFK | #6 |
 | #8  | Citazioni ad Estratti + clic→evidenzia | AFK | #7 |
@@ -107,9 +109,9 @@ La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazion
 
 ## Prossima sessione
 
-**#2, #3, #5A e #5B completate e mergiate.** La issue **#5** resta **aperta**: il dominio (#5A) e la persistenza locale (#5B) ci sono, ma restano da cablare la **UI completa** delle Pratiche (create/open/search) e l'**ingestione delle Fonti** (#6). Prossimo step da decidere insieme.
+**#2, #3 e l'intera #5 (#5A+#5B+#5C) completate e mergiate; issue #5 CHIUSA.** Le Pratiche sono operative end-to-end (dominio → persistenza locale → UI minima create/open/search). Prossimo step da decidere insieme.
 
-Candidati naturali: completare il **cablaggio UI** di create/open/search su #5B; oppure **#6** (allega & ingerisci documento + Evidence), che apre la spina dorsale #6→#8. Restano anche **#4 Installer** (HITL) e #9→#15.
+Candidati naturali: **#6** (allega & ingerisci documento + Evidence), che apre la spina dorsale #6→#8; oppure una **issue separata di UI refinement** per unificare le superfici mock #3 (TopCommandBar/MainWorkspace) col dato reale delle Pratiche. Restano anche **#4 Installer** (HITL) e #9→#15.
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
