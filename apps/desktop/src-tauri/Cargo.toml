@@ -17,3 +17,6 @@ tauri = { version = "2", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 quaero-core = { path = "../../../crates/core" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -5,6 +5,7 @@
 //! in isolation. Tauri depends on `core`, never the other way around.
 
 pub mod domain;
+pub mod persistence;
 
 use serde::{Deserialize, Serialize};
 
