@@ -53,7 +53,7 @@ Una risorsa esterna che non rientra negli altri tipi (es. sito web, report FMI/B
 
 ## Citazione
 
-*(Modellato in #8: `Excerpt` (Estratto), `Anchor` (Ancora) e `Citation` nel dominio canonico. Invariante imposto dal tipo — una `Citation` referenzia un Estratto, **mai** una Fonte. L'Ancora è un localizzatore logico dichiarativo (no parsing in #8); per i Documento un `sourceSha256` opzionale è validato contro `SourceRef.file.sha256`. Vedi `START_HERE.md`.)*
+*(Modellato in #8: `Excerpt` (Estratto), `Anchor` (Ancora) e `Citation` nel dominio canonico. Invariante imposto dal tipo — una `Citation` referenzia un Estratto, **mai** una Fonte. L'Ancora è un localizzatore logico dichiarativo (no parsing in #8); per i Documento un `sourceSha256` opzionale è validato contro `SourceRef.file.sha256`. In #9 un **Verificatore** puro audita la catena (copertura, Estratti orfani, Estratti document-backed non pinnati) e produce un report con attestazione positiva, senza ridefinire la validità strutturale già garantita da #8. Vedi `START_HERE.md`.)*
 
 **Affermazione**:
 Una singola asserzione contenuta in una Risposta di Quaero. Ogni Affermazione deve essere supportata da una o più Fonti.
