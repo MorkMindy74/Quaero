@@ -180,9 +180,9 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 | #10 | ✅ **CHIUSA** — Privacy guard: contratto `quaero-core::privacy` + `PrivacyPolicy::evaluate` default-deny + riga `StatusStrip`. Enforcement su egress reale = slice future | AFK | #8 |
 | #11 | Connettore Normattiva | AFK | #10 |
 | #12 | Valuta clausola + proposta + export DOCX | AFK | #8 |
-| #13 | Connettore giurisprudenza | AFK | #12 |
-| #14 | Firma digitale CNS | HITL | #11 |
-| #15 | Vista Genealogia / Provenance Graph | AFK | #11 |
+| #13 | Connettore giurisprudenza | AFK | #11 |
+| #14 | Firma digitale CNS | HITL | #12 |
+| #15 | Vista Genealogia / Provenance Graph | AFK | #12 |
 
 ## Ordine consigliato di sviluppo
 
