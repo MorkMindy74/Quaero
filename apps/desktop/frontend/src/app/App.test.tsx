@@ -10,6 +10,9 @@ beforeEach(() => {
       const message = (args as { request: { message: string } }).request.message;
       return { reply: `pong: ${message}` };
     }
+    // #5C: the shell loads the saved-matters list on mount. Keep it empty here
+    // so the context panel falls back to the #3 mock view (regression intact).
+    if (cmd === "search_workspaces") return [];
   });
 });
 

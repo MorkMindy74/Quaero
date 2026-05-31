@@ -1,23 +1,44 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { SearchInput, ListRow } from "../ui";
+import { SearchInput, ListRow, Button } from "../ui";
 import { SettingsBlock } from "./SettingsBlock";
-import { recentMatters, pinnedMatters, type MockMatter } from "../../mock/data";
+import type { WorkspaceSummary } from "../../lib/ipc";
 
 interface LeftSidebarProps {
-  matter: MockMatter | null;
-  onSelectMatter: (matter: MockMatter) => void;
+  items: WorkspaceSummary[];
+  loading: boolean;
+  error: string | null;
+  query: string;
+  onQueryChange: (q: string) => void;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  activeId: string | null;
 }
 
 const NAV_ITEMS = ["workspace", "matters", "knowledge"] as const;
 
 // Spec §3 comp 03: primary navigation + matter access; settings at the foot.
-export function LeftSidebar({ matter, onSelectMatter }: LeftSidebarProps) {
+// #5C: the matter list is now driven by the real persistence layer
+// (searchWorkspaces); the search box filters it; "+ Nuova Pratica" creates one.
+export function LeftSidebar({
+  items,
+  loading,
+  error,
+  query,
+  onQueryChange,
+  onOpen,
+  onNew,
+  activeId,
+}: LeftSidebarProps) {
   const { t } = useTranslation();
   const [nav, setNav] = useState<(typeof NAV_ITEMS)[number]>("workspace");
 
   return (
-    <nav data-testid="region-sidebar" aria-label={t("nav.aria")} className="flex min-h-0 flex-col border-r border-hairline bg-panel">
+    <nav
+      data-testid="region-sidebar"
+      aria-label={t("nav.aria")}
+      className="flex min-h-0 flex-col border-r border-hairline bg-panel"
+    >
       <div className="space-y-1 p-2">
         {NAV_ITEMS.map((item) => (
           <button
@@ -33,43 +54,47 @@ export function LeftSidebar({ matter, onSelectMatter }: LeftSidebarProps) {
         ))}
       </div>
 
-      <div className="px-2 pb-2">
-        <SearchInput placeholder={t("sidebar.search")} aria-label={t("sidebar.search")} />
+      <div className="space-y-2 px-2 pb-2">
+        <SearchInput
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder={t("sidebar.search")}
+          aria-label={t("sidebar.search")}
+        />
+        <Button variant="primary" className="w-full justify-center" onClick={onNew}>
+          {t("matters.new")}
+        </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-2">
-        <SidebarList label={t("sidebar.recenti")} items={recentMatters} active={matter} onSelect={onSelectMatter} />
-        <SidebarList label={t("sidebar.pinned")} items={pinnedMatters} active={matter} onSelect={onSelectMatter} />
+      <div className="min-h-0 flex-1 overflow-auto px-2" aria-label={t("matters.list")}>
+        <div className="px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-muted">
+          {t("matters.list")}
+        </div>
+
+        {loading && <div className="px-2 py-1 text-xs text-muted">{t("matters.loading")}</div>}
+
+        {error && (
+          <div role="alert" className="px-2 py-1 text-xs text-accent-warning">
+            {t("matters.errorLoad")}
+          </div>
+        )}
+
+        {!loading && !error && items.length === 0 && (
+          <div className="px-2 py-1 text-xs text-muted">{t("matters.empty")}</div>
+        )}
+
+        {items.map((m) => (
+          <ListRow
+            key={m.id}
+            title={m.title}
+            meta={m.client}
+            active={activeId === m.id}
+            onClick={() => onOpen(m.id)}
+          />
+        ))}
       </div>
 
       <SettingsBlock />
     </nav>
-  );
-}
-
-function SidebarList({
-  label,
-  items,
-  active,
-  onSelect,
-}: {
-  label: string;
-  items: MockMatter[];
-  active: MockMatter | null;
-  onSelect: (matter: MockMatter) => void;
-}) {
-  return (
-    <div className="mb-3">
-      <div className="px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-muted">{label}</div>
-      {items.map((matter) => (
-        <ListRow
-          key={matter.id}
-          title={matter.title}
-          meta={matter.meta}
-          active={active?.id === matter.id}
-          onClick={() => onSelect(matter)}
-        />
-      ))}
-    </div>
   );
 }

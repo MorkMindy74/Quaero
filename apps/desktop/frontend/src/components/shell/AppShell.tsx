@@ -5,13 +5,34 @@ import { MainWorkspace } from "./MainWorkspace";
 import { RightContextPanel } from "./RightContextPanel";
 import { StatusStrip } from "./StatusStrip";
 import { CommandPalette } from "./CommandPalette";
+import { NewMatterDialog } from "./NewMatterDialog";
 import { matters, type MockMatter } from "../../mock/data";
+import { openWorkspace as ipcOpenWorkspace } from "../../lib/ipc";
+import { useWorkspaces } from "../../lib/useWorkspaces";
+import type { WorkspaceView } from "../../domain/types";
 
-// AppShell (Screen Spec v0.2, comp 01): owns the 5-region grid. Default state =
-// "Matter workspace open" — a matter is open, Conversation mode, Sources tab.
+// AppShell (Screen Spec v0.2, comp 01): owns the 5-region grid.
+// #5C: the left sidebar + context panel are wired to the real local persistence
+// (create/open/search via #5B IPC). The TopCommandBar / MainWorkspace surfaces
+// stay on the #3 mock for now (out of scope here).
 export default function AppShell() {
   const [matter, setMatter] = useState<MockMatter | null>(matters[0]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const workspaces = useWorkspaces();
+  const [open, setOpen] = useState<WorkspaceView | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+
+  const openById = async (id: string) => {
+    setOpenError(null);
+    try {
+      setOpen(await ipcOpenWorkspace(id));
+    } catch {
+      setOpen(null);
+      setOpenError("matters.errorOpen");
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -28,12 +49,37 @@ export default function AppShell() {
     <div className="grid h-screen grid-rows-[auto_minmax(0,1fr)_auto] bg-background text-ink">
       <TopCommandBar matter={matter} onSelectMatter={setMatter} onOpenPalette={() => setPaletteOpen(true)} />
       <div className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)_348px]">
-        <LeftSidebar matter={matter} onSelectMatter={setMatter} />
+        <LeftSidebar
+          items={workspaces.items}
+          loading={workspaces.loading}
+          error={workspaces.error}
+          query={workspaces.query}
+          onQueryChange={workspaces.setQuery}
+          onOpen={(id) => void openById(id)}
+          onNew={() => setNewOpen(true)}
+          activeId={open?.matter.id ?? null}
+        />
         <MainWorkspace matter={matter} />
-        <RightContextPanel />
+        <RightContextPanel workspace={open ?? undefined} />
       </div>
       <StatusStrip />
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {newOpen && (
+        <NewMatterDialog
+          error={workspaces.error}
+          onClose={() => setNewOpen(false)}
+          onCreate={async (clientName, title, subject) => {
+            const summary = await workspaces.createMatter(clientName, title, subject);
+            if (summary) await openById(summary.id);
+            return summary;
+          }}
+        />
+      )}
+      {openError && (
+        <div role="alert" className="sr-only">
+          {openError}
+        </div>
+      )}
     </div>
   );
 }

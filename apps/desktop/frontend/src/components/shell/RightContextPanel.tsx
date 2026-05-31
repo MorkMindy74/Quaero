@@ -10,7 +10,7 @@ import {
   memoryItems,
   agentActivity,
 } from "../../mock/data";
-import { SOURCE_TYPE_LABEL } from "../../domain/types";
+import { SOURCE_TYPE_LABEL, type WorkspaceView } from "../../domain/types";
 
 type TabId = "sources" | "excerpts" | "reasoning" | "memory" | "genealogy" | "agent";
 
@@ -19,8 +19,9 @@ const GROUPS: { label: string; tabs: TabId[] }[] = [
   { label: "tabs.groupContext", tabs: ["memory", "genealogy", "agent"] },
 ];
 
-const COUNTS: Partial<Record<TabId, number>> = {
-  sources: workspaceView.sources.length,
+// Counts for the static (#3 mock) tabs; the Sources count is derived from the
+// active workspace view at render time.
+const STATIC_COUNTS: Partial<Record<TabId, number>> = {
   excerpts: excerpts.length,
   reasoning: reasoningSteps.length,
   memory: memoryItems.length,
@@ -30,8 +31,16 @@ const COUNTS: Partial<Record<TabId, number>> = {
 // Sources tab (slice #5A): the matter's Fonti grouped by typed Fascicolo views —
 // dynamic dossiers (by SourceType) + a manual one. Demonstrates the domain model
 // (Cliente → Pratica → Fascicolo/vista → Fonte) with many-to-many membership.
-function SourcesTab({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const { client, matter, sources, dossiers } = workspaceView;
+function SourcesTab({
+  view,
+  selected,
+  onSelect,
+}: {
+  view: WorkspaceView;
+  selected: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const { client, matter, sources, dossiers } = view;
   const findSource = (id: string) => sources.find((s) => s.id === id);
   const dynamic = dossiers.filter((d) => d.kind === "Dynamic");
   const manual = dossiers.filter((d) => d.kind === "Manual");
@@ -90,10 +99,18 @@ function SourcesTab({ selected, onSelect }: { selected: string | null; onSelect:
 }
 
 // Spec §3 comp 05 + §5: permanent evidence/control panel. Default = Sources.
-export function RightContextPanel() {
+// #5C: when a real workspace is open it drives the Sources tab; otherwise the
+// panel falls back to the #3 mock view (no regression to the shell demo).
+export function RightContextPanel({ workspace }: { workspace?: WorkspaceView }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
   const [selected, setSelected] = useState<string | null>(null);
+
+  const view = workspace ?? workspaceView;
+  const counts: Partial<Record<TabId, number>> = {
+    ...STATIC_COUNTS,
+    sources: view.sources.length,
+  };
 
   return (
     <aside
@@ -111,7 +128,7 @@ export function RightContextPanel() {
                   key={id}
                   active={tab === id}
                   onClick={() => setTab(id)}
-                  count={COUNTS[id]}
+                  count={counts[id]}
                   alert={id === "genealogy"}
                 >
                   {t(`tabs.${id}`)}
@@ -123,7 +140,7 @@ export function RightContextPanel() {
       </div>
 
       <div role="tabpanel" className="min-h-0 flex-1 space-y-3 overflow-auto p-3 leading-relaxed">
-        {tab === "sources" && <SourcesTab selected={selected} onSelect={setSelected} />}
+        {tab === "sources" && <SourcesTab view={view} selected={selected} onSelect={setSelected} />}
         {tab === "excerpts" && excerpts.map((excerpt) => <ExcerptCard key={excerpt.id} excerpt={excerpt} />)}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}
         {tab === "memory" &&
