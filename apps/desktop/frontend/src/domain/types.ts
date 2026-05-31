@@ -43,13 +43,21 @@ export interface DossierView {
   sources: string[];
 }
 
+/** Canonical manual Fascicolo — NO `kind`, so canonical state can never
+ *  represent a dynamic dossier. Mirrors `quaero_core::domain::ManualDossier`. */
+export interface ManualDossier {
+  id: string;
+  name: string;
+  sources: string[];
+}
+
 /** Canonical / persistable state: sources + user-curated manual dossiers only.
  *  Dynamic dossiers are NOT stored here — they are derived (see WorkspaceView). */
 export interface Workspace {
   client: Client;
   matter: Matter;
   sources: SourceRef[];
-  manualDossiers: DossierView[];
+  manualDossiers: ManualDossier[];
 }
 
 /** Derived, non-canonical view for the UI: dynamic (computed) + manual dossiers.
