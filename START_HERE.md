@@ -8,15 +8,16 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-05-31)
 
-- Fase: **#2, #3, #5A, #5B e #5C COMPLETATE e mergiate in `main`.** La **issue #5 è CHIUSA**: Pratiche (crea/apri/cerca, locale) completate end-to-end. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`fdd36ef`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C) e #6 COMPLETATE e mergiate in `main`.** Le **issue #5 e #6 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`0d83ee5`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
 - **#5B** persistenza locale JSON del `Workspace` (create/open/search): helper puri in `quaero-core::persistence` + store desktop (`store.rs`, `std::fs`) + 3 comandi IPC + wrapper TS tipizzati. **PR #22 mergiata** (commit `e236449`).
 - **#5C** UI minima collegata a create/open/search (**frontend-only**): lista Pratiche da `searchWorkspaces`, dialog "+ Nuova Pratica" → `createWorkspace`, apertura → `openWorkspace` nel pannello Sources; `slug()` per gli id; stati loading/error/empty. **PR #24 mergiata** (commit `fdd36ef`). Backend/IPC/filesystem/capability **non toccati**; Codex review non necessaria (frontend-only).
 - **Issue #5 CHIUSA**: completata end-to-end con **#5A** (dominio canonico) + **#5B** (persistenza) + **#5C** (UI wiring). L'unificazione mock↔reale di TopCommandBar/MainWorkspace resta un **refinement UI futuro**, non parte dello scope di #5.
-- Test su `main`: **57 Rust** (31 unit core + 8 integration + 18 store desktop) + **31 frontend**; CI verde.
+- **#6** ingestione documenti / Evidence v1: import di un file locale come **Fonte Documento**, byte in `app_data/files/<matterId>/`, registrazione canonica **`SourceRef + StoredFile`** (`storedName`/`originalName`/`byteLen`/`sha256`), byte **fuori** dal JSON, pubblicazione blob **esclusiva** (no overwrite), path safety, UI minima. **PR #26 mergiata** (commit `0d83ee5`). **Issue #6 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità blob) → fix → giro 2 `approve-with-notes` (nessun BLOCKER/SHOULD FIX residuo).
+- Test su `main`: **75 Rust** (39 unit core + 8 integration + 28 store desktop) + **34 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -62,6 +63,24 @@ La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazion
 
 *(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER `create` concorrente + SHOULD FIX `search`/file ostili + SHOULD FIX cleanup temp — tutti risolti; verdetto finale senza BLOCKER né SHOULD FIX.)*
 
+## Ingestione documenti / Evidence (#6, consolidato)
+
+L'import vive nel core (`quaero-core`: `StoredFile`, `SourceRef.file`, `Workspace::with_source`, `hash::sha256_hex` via `sha2`) + store desktop (`store::import_document`). **PR #26 mergiata** (commit `0d83ee5`).
+
+- **Import**: un file locale → **Fonte Documento** (`SourceRef` con `kind: Documento` + `file: StoredFile`). I **byte** vivono in `app_data/files/<matterId>/<storedName>`, **mai** nel JSON del Workspace.
+- **`StoredFile`**: `storedName` (nome on-disk generato, sicuro), `originalName` (solo display, **mai** path), `byteLen`, **`sha256`** (hex lowercase) — fondamento minimo di **Evidence** (integrità verificabile, base delle future Ancore).
+- **Pubblicazione blob esclusiva**: temp unico + `fs::hard_link` (fallisce se la destinazione esiste); un id che collide (con una Fonte del Workspace o con un blob orfano) **rigenera**, **mai overwrite** → `sha256`/`byteLen` sempre coerenti coi byte fisici. Ordine **blob → JSON** (worst case: blob orfano).
+- **Path safety**: `matterId`/`sourceId`/estensione validati o generati; nessun path deriva da `originalName`.
+- **Concorrenza**: **mutex per-matter in-process** → import concorrenti non perdono Fonti.
+- **Trasporto**: byte via IPC (`<input type=file>` + `arrayBuffer`); **nessun `tauri-plugin-fs`/`-dialog`, nessuna nuova capability** (`core:default`). Cap **25 MB**.
+- **`SourceRef.file` opzionale** (`serde(default)` + `skip_serializing_if`) → i Workspace pre-#6 restano caricabili.
+
+**Limite accettato #6 v1**: il cap 25 MB protegge persistenza/disco ma il payload IPC viene **allocato prima** del controllo (vettore solo locale). Il protocollo **chunked/streaming** è un **candidato slice futura separata**, fuori da #6.
+
+**Fuori da #6**: parsing PDF/DOCX, OCR, AI, preview/rendering, **Estratti/Ancore/Citazioni (#8)**, dedup, verifica periodica dell'hash, chunked import.
+
+*(Consolidato dopo 2 giri di review avversariale Codex: BLOCKER integrità blob — overwrite su collisione id — risolto con pubblicazione esclusiva + rigenerazione; verdetto finale `approve-with-notes`, size-cap/DoS accettato come CAN WAIT fuori scope.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -89,7 +108,7 @@ La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazion
 | #3  | ✅ Design language "wow" + cockpit shell + component kit | HITL | #2 |
 | #4  | Installer "wow" + login semplice | HITL | #2 |
 | #5  | ✅ **CHIUSA** — Pratiche (Cliente→Pratica→Fascicolo): #5A dominio + #5B persistenza + #5C UI wiring (create/open/search). Unificazione mock↔reale = refinement UI futuro | AFK | #2, #3 |
-| #6  | Allega & ingerisci documento + Evidence | AFK | #5 |
+| #6  | ✅ **CHIUSA** — Allega & ingerisci documento + Evidence (import→Fonte Documento + `sha256`; byte fuori JSON; pubblicazione esclusiva). Chunked import = slice futura | AFK | #5 |
 | #7  | Chat che risponde (senza citazioni) | AFK | #6 |
 | #8  | Citazioni ad Estratti + clic→evidenzia | AFK | #7 |
 | #9  | Verificatore citazioni | AFK | #8 |
@@ -109,9 +128,9 @@ La persistenza vive in `quaero-core::persistence` (puro: solo (de)serializzazion
 
 ## Prossima sessione
 
-**#2, #3 e l'intera #5 (#5A+#5B+#5C) completate e mergiate; issue #5 CHIUSA.** Le Pratiche sono operative end-to-end (dominio → persistenza locale → UI minima create/open/search). Prossimo step da decidere insieme.
+**#2, #3, l'intera #5 e #6 completate e mergiate; issue #5 e #6 CHIUSE.** Le Pratiche sono operative end-to-end e i documenti si importano come Fonti (Evidence v1, con `sha256`). Prossimo step da decidere insieme.
 
-Candidati naturali: **#6** (allega & ingerisci documento + Evidence), che apre la spina dorsale #6→#8; oppure una **issue separata di UI refinement** per unificare le superfici mock #3 (TopCommandBar/MainWorkspace) col dato reale delle Pratiche. Restano anche **#4 Installer** (HITL) e #9→#15.
+Candidati naturali: **#7** (chat che risponde, senza citazioni), ora sbloccata da #6, verso la spina dorsale #7→#8 (Citazioni ad Estratti); oppure le slice di rinforzo già individuate — **`chunked document import`** (robustezza payload IPC), **UI refinement** mock↔reale (TopCommandBar/MainWorkspace). Restano anche **#4 Installer** (HITL) e #9→#15.
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
 
