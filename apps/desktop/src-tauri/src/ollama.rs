@@ -80,6 +80,13 @@ impl OllamaLocalProvider {
         let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(TIMEOUT_SECS))
+            // Fail-closed local-only: a local (possibly untrusted) server could
+            // answer with a 3xx `Location: http://evil.example/...`; reqwest's
+            // DEFAULT policy would re-send this same body (system + user prompt)
+            // off-device. A local provider has no legitimate reason to follow a
+            // redirect, not even to another loopback host → disable them entirely.
+            // Any 3xx then stays a non-success status and is handled as an error.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("errore inizializzazione client locale: {e}"))?;
 
@@ -192,6 +199,12 @@ fn map_send_error(e: reqwest::Error) -> String {
 fn map_status_error(code: u16) -> String {
     match code {
         404 => "modello non trovato in Ollama (verifica il nome del modello)".to_string(),
+        // Redirects are disabled (local-only): a 3xx is never followed and is
+        // surfaced as an error so the prompt never leaves loopback via Location.
+        300..=399 => {
+            "il modello locale ha tentato un redirect (bloccato: nessun dato esce da loopback)"
+                .to_string()
+        }
         other => format!("il modello locale ha risposto con stato {other}"),
     }
 }
@@ -260,6 +273,57 @@ mod tests {
     fn status_errors_are_friendly() {
         assert!(map_status_error(404).contains("modello non trovato"));
         assert!(map_status_error(500).contains("stato 500"));
+        // Any 3xx is reported as a blocked redirect (never followed).
+        assert!(map_status_error(307).contains("redirect"));
+        assert!(map_status_error(308).contains("redirect"));
+        assert!(map_status_error(301).contains("redirect"));
+    }
+
+    /// Regression for the Codex critical: a local server returning a 3xx
+    /// `Location: http://evil.example/...` must NOT cause the prompt to be
+    /// re-sent off-device. With redirects disabled the 307 stays a 307 → error,
+    /// and the only connection ever made is to the loopback test server. If the
+    /// redirect were followed, reqwest would instead try to reach `evil.example`
+    /// (DNS/connect failure), producing a different, non-"redirect" error.
+    #[test]
+    fn local_307_redirect_to_remote_is_not_followed() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        // One-shot loopback server that replies 307 → remote, then closes.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, peer)) = listener.accept() {
+                // The only inbound connection must come from loopback.
+                assert!(peer.ip().is_loopback(), "server reached from non-loopback");
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf); // drain (best-effort) the request
+                let response = "HTTP/1.1 307 Temporary Redirect\r\n\
+                     Location: http://evil.example/leak\r\n\
+                     Content-Length: 0\r\n\
+                     Connection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let provider = OllamaLocalProvider {
+            base_url: format!("http://127.0.0.1:{port}"),
+            model: "qwen3".to_string(),
+        };
+        let request = ChatRequest {
+            prompt: "bozza riservata".to_string(),
+        };
+        // Use Tauri's runtime (already a dependency) — no new dev-dep.
+        let result = tauri::async_runtime::block_on(provider.respond(&request));
+        handle.join().ok();
+
+        let err = result.expect_err("a 3xx must surface as an error, not be followed");
+        assert!(
+            err.contains("redirect"),
+            "expected a blocked-redirect error, got: {err}"
+        );
     }
 
     #[test]
