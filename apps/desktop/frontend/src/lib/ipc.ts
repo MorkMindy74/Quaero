@@ -61,7 +61,13 @@ export interface ChatReply {
   grounded: boolean;
 }
 
-/** Send a chat turn to the deterministic stub provider (offline, no LLM). */
+/** Send a chat turn to the active provider (default offline stub; opt-in local Ollama). */
 export function chatSend(prompt: string): Promise<ChatReply> {
   return invoke<ChatReply>("chat_send", { request: { prompt } });
+}
+
+/** Which chat provider is active: "stub" (offline) | "ollamaLocal". Used by the
+ *  StatusStrip to show an honest privacy posture. Returns a config flag, no data. */
+export function chatProviderKind(): Promise<string> {
+  return invoke<string>("chat_provider_kind");
 }

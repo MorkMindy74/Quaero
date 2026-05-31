@@ -22,9 +22,10 @@ test("AppShell renders the five cockpit regions", () => {
   expect(screen.getByTestId("region-status")).toBeInTheDocument();
 });
 
-test("#10 the status strip shows the local-only privacy posture", () => {
+test("#10/#37 the status strip shows the derived privacy posture (default: stub offline)", () => {
   render(<AppShell />);
-  expect(screen.getByTestId("status-privacy")).toHaveTextContent(
-    "Privacy: locale · nessun dato esce dal dispositivo",
-  );
+  // no chat_provider_kind mock here → provider stays "stub" → offline posture,
+  // still truthfully "no data leaves this device".
+  expect(screen.getByTestId("status-privacy")).toHaveTextContent("chat stub offline");
+  expect(screen.getByTestId("status-privacy")).toHaveTextContent("nessun dato esce dal dispositivo");
 });

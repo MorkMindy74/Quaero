@@ -2328,6 +2328,7 @@ name = "quaero-desktop"
 version = "0.1.0"
 dependencies = [
  "quaero-core",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",

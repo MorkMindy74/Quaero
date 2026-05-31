@@ -99,6 +99,8 @@
   "genealogy.docLineage": "Document genealogy",
   "status.localPrivate": "Local & private",
   "status.privacy": "Privacy: local · no data leaves this device",
+  "status.privacyStub": "Privacy: local · offline stub chat · no data leaves this device",
+  "status.privacyLocalModel": "Privacy: local · local model active · no data leaves this device",
   "status.coreActive": "Core active · ping",
   "status.coreErr": "Core: --",
   "status.sourcesVerified": "Sources 2/3 verified",

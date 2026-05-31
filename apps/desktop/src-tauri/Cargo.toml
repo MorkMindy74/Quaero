@@ -17,6 +17,10 @@ tauri = { version = "2", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 quaero-core = { path = "../../../crates/core" }
+# Local Ollama provider only (#37): async HTTP to http://127.0.0.1:11434.
+# default-features = false → no new TLS stack (localhost http needs none);
+# `json` reuses serde_json (already present). reqwest 0.13 is already in the lock.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3"
