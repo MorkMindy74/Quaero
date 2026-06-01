@@ -605,6 +605,13 @@ pub enum WorkspaceError {
     ExcerptShaWithoutFile { excerpt: String, source: String },
     /// An excerpt's `sourceSha256` does not match the referenced file's digest.
     ExcerptShaMismatch { excerpt: String, source: String },
+    /// Edit/delete targeted an excerpt id that does not exist.
+    UnknownExcerpt(String),
+    /// Edit/delete targeted a citation id that does not exist.
+    UnknownCitation(String),
+    /// Deleting an excerpt that is still referenced by a citation is refused
+    /// (delete the citation first) — a cited excerpt never disappears silently.
+    ExcerptIsCited { excerpt: String, citation: String },
 }
 
 impl std::fmt::Display for WorkspaceError {
@@ -639,6 +646,12 @@ impl std::fmt::Display for WorkspaceError {
             WorkspaceError::ExcerptShaMismatch { excerpt, source } => write!(
                 f,
                 "excerpt {excerpt} sha256 does not match the stored file of source {source}"
+            ),
+            WorkspaceError::UnknownExcerpt(id) => write!(f, "unknown excerpt id: {id}"),
+            WorkspaceError::UnknownCitation(id) => write!(f, "unknown citation id: {id}"),
+            WorkspaceError::ExcerptIsCited { excerpt, citation } => write!(
+                f,
+                "excerpt {excerpt} is cited by {citation}: delete the citation first"
             ),
         }
     }
@@ -873,6 +886,95 @@ impl Workspace {
     pub fn with_citation(self, citation: Citation) -> Result<Self, WorkspaceError> {
         let mut citations = self.citations;
         citations.push(citation);
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            self.excerpts,
+            citations,
+        )
+    }
+
+    /// Replace the excerpt sharing `new.id` with `new` (edit), re-validating the
+    /// whole graph. `UnknownExcerpt` if no excerpt has that id. The caller is
+    /// expected to preserve `source_id`/`source_sha256`/`created_at` so editing a
+    /// quote never re-pins or moves the Fonte. Never mutates in place.
+    pub fn replace_excerpt(self, new: Excerpt) -> Result<Self, WorkspaceError> {
+        if !self.excerpts.iter().any(|e| e.id() == new.id()) {
+            return Err(WorkspaceError::UnknownExcerpt(new.id().0.clone()));
+        }
+        let excerpts = self
+            .excerpts
+            .into_iter()
+            .map(|e| if e.id() == new.id() { new.clone() } else { e })
+            .collect();
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            excerpts,
+            self.citations,
+        )
+    }
+
+    /// Replace the citation sharing `new.id` with `new` (edit), re-validating the
+    /// whole graph. `UnknownCitation` if no citation has that id.
+    pub fn replace_citation(self, new: Citation) -> Result<Self, WorkspaceError> {
+        if !self.citations.iter().any(|c| c.id() == new.id()) {
+            return Err(WorkspaceError::UnknownCitation(new.id().0.clone()));
+        }
+        let citations = self
+            .citations
+            .into_iter()
+            .map(|c| if c.id() == new.id() { new.clone() } else { c })
+            .collect();
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            self.excerpts,
+            citations,
+        )
+    }
+
+    /// Remove an excerpt by id. **Refused** (`ExcerptIsCited`) if any citation
+    /// still references it — a cited excerpt never disappears silently; delete the
+    /// citation first. `UnknownExcerpt` if absent.
+    pub fn without_excerpt(self, id: &ExcerptId) -> Result<Self, WorkspaceError> {
+        if !self.excerpts.iter().any(|e| e.id() == id) {
+            return Err(WorkspaceError::UnknownExcerpt(id.0.clone()));
+        }
+        if let Some(c) = self.citations.iter().find(|c| c.excerpt_id() == id) {
+            return Err(WorkspaceError::ExcerptIsCited {
+                excerpt: id.0.clone(),
+                citation: c.id().0.clone(),
+            });
+        }
+        let excerpts = self.excerpts.into_iter().filter(|e| e.id() != id).collect();
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            excerpts,
+            self.citations,
+        )
+    }
+
+    /// Remove a citation by id (always safe — citations are leaves).
+    /// `UnknownCitation` if absent.
+    pub fn without_citation(self, id: &CitationId) -> Result<Self, WorkspaceError> {
+        if !self.citations.iter().any(|c| c.id() == id) {
+            return Err(WorkspaceError::UnknownCitation(id.0.clone()));
+        }
+        let citations = self
+            .citations
+            .into_iter()
+            .filter(|c| c.id() != id)
+            .collect();
         Workspace::new_with_evidence(
             self.client,
             self.matter,
@@ -1857,6 +1959,136 @@ mod tests {
             Citation::new("c1", "   ", ExcerptId::new("e1")),
             Err(CitationError::EmptyClaim)
         );
+    }
+
+    // ----- edit/delete Estratti e Citazioni -----
+
+    /// Workspace with source s1 + excerpt e1 (cited by c1) + an uncited excerpt e2.
+    fn ws_with_chain() -> Workspace {
+        let sha = "ab".repeat(32);
+        Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![doc_with_file("s1", &sha)],
+            vec![],
+            vec![
+                Excerpt::new_with_meta(
+                    "e1",
+                    SourceId::new("s1"),
+                    anchor("clausola", "7.2"),
+                    "quote uno",
+                    Some(sha.clone()),
+                    Some("nota".to_string()),
+                    Some("2026-06-01T10:00:00Z".to_string()),
+                )
+                .unwrap(),
+                Excerpt::new(
+                    "e2",
+                    SourceId::new("s1"),
+                    anchor("pagina", "3"),
+                    "quote due",
+                    None,
+                )
+                .unwrap(),
+            ],
+            vec![Citation::new("c1", "Affermazione.", ExcerptId::new("e1")).unwrap()],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn without_citation_removes_and_reports_unknown() {
+        let ws = ws_with_chain()
+            .without_citation(&CitationId::new("c1"))
+            .unwrap();
+        assert!(ws.citations().is_empty());
+        assert!(matches!(
+            ws.without_citation(&CitationId::new("c1")),
+            Err(WorkspaceError::UnknownCitation(_))
+        ));
+    }
+
+    #[test]
+    fn replace_citation_edits_claim_only() {
+        let ws = ws_with_chain();
+        let edited = Citation::new("c1", "Affermazione corretta.", ExcerptId::new("e1")).unwrap();
+        let ws = ws.replace_citation(edited).unwrap();
+        assert_eq!(ws.citations()[0].claim(), "Affermazione corretta.");
+        assert_eq!(ws.citations()[0].excerpt_id().0, "e1"); // link unchanged
+                                                            // unknown id rejected
+        let ghost = Citation::new("cZ", "x", ExcerptId::new("e1")).unwrap();
+        assert!(matches!(
+            ws.replace_citation(ghost),
+            Err(WorkspaceError::UnknownCitation(_))
+        ));
+    }
+
+    #[test]
+    fn without_excerpt_blocks_a_cited_excerpt() {
+        let ws = ws_with_chain();
+        // e1 is cited by c1 → refused
+        assert!(matches!(
+            ws.clone().without_excerpt(&ExcerptId::new("e1")),
+            Err(WorkspaceError::ExcerptIsCited { .. })
+        ));
+        // e2 is uncited → removed
+        let ws2 = ws.clone().without_excerpt(&ExcerptId::new("e2")).unwrap();
+        assert_eq!(ws2.excerpts().len(), 1);
+        assert_eq!(ws2.excerpts()[0].id().0, "e1");
+        // unknown id
+        assert!(matches!(
+            ws.without_excerpt(&ExcerptId::new("eZ")),
+            Err(WorkspaceError::UnknownExcerpt(_))
+        ));
+    }
+
+    #[test]
+    fn delete_citation_then_excerpt_succeeds() {
+        let ws = ws_with_chain()
+            .without_citation(&CitationId::new("c1"))
+            .unwrap()
+            .without_excerpt(&ExcerptId::new("e1"))
+            .unwrap();
+        assert!(ws.citations().is_empty());
+        assert_eq!(ws.excerpts().len(), 1); // only e2 left
+    }
+
+    #[test]
+    fn replace_excerpt_edits_text_preserving_pin_source_and_createdat() {
+        let ws = ws_with_chain();
+        let sha = "ab".repeat(32);
+        // Edit quote/anchor/note while keeping id, source_id, pin, createdAt.
+        let edited = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("clausola", "7.3"),
+            "quote uno corretta",
+            Some(sha.clone()),
+            Some("nota nuova".to_string()),
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        let ws = ws.replace_excerpt(edited).unwrap();
+        let e = ws.excerpts().iter().find(|e| e.id().0 == "e1").unwrap();
+        assert_eq!(e.quote(), "quote uno corretta");
+        assert_eq!(e.anchor().value, "7.3");
+        assert_eq!(e.note(), Some("nota nuova"));
+        // invariants: Fonte + pin + createdAt unchanged
+        assert_eq!(e.source_id().0, "s1");
+        assert_eq!(e.source_sha256(), Some(sha.as_str()));
+        assert_eq!(e.created_at(), Some("2026-06-01T10:00:00Z"));
+        // the citation still points at e1
+        assert_eq!(ws.citations()[0].excerpt_id().0, "e1");
+    }
+
+    #[test]
+    fn replace_excerpt_unknown_id_is_rejected() {
+        let ws = ws_with_chain();
+        let ghost = Excerpt::new("eZ", SourceId::new("s1"), anchor("k", "v"), "q", None).unwrap();
+        assert!(matches!(
+            ws.replace_excerpt(ghost),
+            Err(WorkspaceError::UnknownExcerpt(_))
+        ));
     }
 
     fn doc_with_file(id: &str, sha: &str) -> SourceRef {
