@@ -125,24 +125,27 @@ fn safe_file_stem(id: &str) -> Result<&str, StoreError> {
     }
 }
 
-/// A persisted `StoredFile.stored_name` is generated safely at import, but it is
-/// a plain string in the canonical model — a hostile/corrupt JSON could set it
-/// to a traversal/absolute path or a Windows device. Anywhere we turn it into a
-/// filesystem path we require a **bare, non-special filename**:
-/// - non-empty, no `..`, no `/`/`\`/NUL/`:`, not absolute, exactly one component;
-/// - no trailing `.`/space (Windows strips these, changing the target);
-/// - not a reserved DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`,
-///   `LPT1..9`), case-insensitive, including with an extension (e.g. `CON.txt`),
-///   because on Windows those resolve to a device even under a normal directory.
+/// A persisted `StoredFile.stored_name` is generated safely at import
+/// (`doc-<pid>-<n>.<ext>`), but it is a plain string in the canonical model — a
+/// hostile/corrupt JSON could set it to a traversal/absolute path or a Windows
+/// device. Anywhere we turn it into a filesystem path we accept ONLY a name of
+/// the shape Quaero itself generates — a **positive allowlist**, not a denylist:
+/// - only ASCII `[A-Za-z0-9._-]` → closes whole classes at once (`:` drive/ADS,
+///   `$` of `CONIN$`/`CONOUT$`, non-ASCII superscripts like `COM¹`, separators,
+///   NUL, spaces);
+/// - structural: non-empty, no `..`, not absolute, exactly one component, no
+///   trailing `.`;
+/// - plus reserved DOS device basenames (`CON`/`PRN`/`AUX`/`NUL`/`COM1..9`/
+///   `LPT1..9`), case-insensitive, incl. with an extension (e.g. `CON.txt`) —
+///   these use only allowed characters, so the allowlist alone wouldn't catch
+///   them.
 fn is_safe_stored_name(name: &str) -> bool {
     if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
         || name.contains("..")
-        || name.contains('/')
-        || name.contains('\\')
-        || name.contains('\0')
-        || name.contains(':')
         || name.ends_with('.')
-        || name.ends_with(' ')
         || Path::new(name).is_absolute()
         || Path::new(name).components().count() != 1
     {
@@ -1566,9 +1569,13 @@ mod tests {
 
     #[test]
     fn is_safe_stored_name_accepts_generated_rejects_hostile() {
-        // import-generated names must keep passing
+        // import-generated names (doc-<pid>-<n>.<ext>) must keep passing
         assert!(is_safe_stored_name("doc-123-0.pdf"));
-        assert!(is_safe_stored_name("doc-4567-12.docx"));
+        assert!(is_safe_stored_name("doc-123-1.pdf"));
+        assert!(is_safe_stored_name(&format!(
+            "doc-{}-7.docx",
+            std::process::id()
+        )));
         assert!(is_safe_stored_name("exc.bin"));
         for bad in [
             "",
@@ -1580,13 +1587,18 @@ mod tests {
             "/abs",
             "/etc/passwd",
             "with\0nul",
-            // Windows drive / ADS separator
+            // outside the ASCII allowlist
             "C:",
             "C:foo",
             "file.txt:stream",
-            // trailing dot / space (Windows strips these)
+            "nome con spazio.pdf", // space
+            "CONIN$",              // '$' not allowed
+            "CONOUT$",
+            "COM\u{00B9}.txt", // superscript ¹ → non-ASCII
+            "LPT\u{00B2}.doc", // superscript ²
+            "café.pdf",        // non-ASCII letter
+            // trailing dot
             "file.",
-            "file ",
             // reserved DOS device names, with and without extension, any case
             "NUL",
             "CON",
