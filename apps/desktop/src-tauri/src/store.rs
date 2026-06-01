@@ -298,6 +298,17 @@ fn load_consistent(path: &Path) -> Result<Workspace, StoreError> {
                     reason: format!("unsafe stored file name {:?}", file.stored_name),
                 });
             }
+            // A hostile JSON must not be able to inflate the recorded size beyond
+            // the import cap (would otherwise drive an oversized Evidence read).
+            if file.byte_len > MAX_IMPORT_BYTES {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!(
+                        "stored file byteLen {} exceeds the limit {MAX_IMPORT_BYTES}",
+                        file.byte_len
+                    ),
+                });
+            }
         }
     }
     Ok(ws)
@@ -669,6 +680,16 @@ fn add_excerpt_with(
                         source: source_id.to_string(),
                         reason: "stored file is not a regular file (symlink/device/dir rejected)"
                             .to_string(),
+                    });
+                }
+                // Independent read cap: never read more than the import limit,
+                // regardless of the (untrusted) recorded byteLen.
+                if meta.len() > MAX_IMPORT_BYTES {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: format!(
+                            "stored file exceeds the size limit ({MAX_IMPORT_BYTES} bytes)"
+                        ),
                     });
                 }
                 // Check the on-disk length against the recorded byteLen BEFORE
@@ -1557,6 +1578,54 @@ mod tests {
         let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
         assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
         assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn load_consistent_rejects_inflated_byte_len() {
+        let dir = tempdir().unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("s1"),
+                kind: SourceType::Documento,
+                title: "x".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: "doc-1-1.pdf".to_string(),
+                    original_name: "x".to_string(),
+                    byte_len: MAX_IMPORT_BYTES + 1, // inflated beyond the cap
+                    sha256: "ab".repeat(32),
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir.path(), &ws).unwrap();
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn add_excerpt_rejects_blob_larger_than_cap_before_reading() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        // Safe name + small byteLen → workspace loads fine…
+        plant_workspace_with_stored_name(dir.path(), "doc-1-1.pdf");
+        // …but the on-disk blob is sparse-huge (> cap); set_len avoids writing 25MB.
+        fs::create_dir_all(files.path().join("m")).unwrap();
+        let blob = files.path().join("m").join("doc-1-1.pdf");
+        let f = fs::File::create(&blob).unwrap();
+        f.set_len(MAX_IMPORT_BYTES + 1).unwrap();
+        drop(f);
+
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(dir.path(), "m").unwrap().excerpts.is_empty());
     }
 
     #[cfg(unix)]
