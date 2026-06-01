@@ -77,8 +77,10 @@ pub fn add_excerpt(
     note: Option<String>,
 ) -> Result<WorkspaceView, String> {
     let ws_dir = workspaces_dir(&app)?;
+    let blob_dir = files_dir(&app)?;
     store::add_excerpt(
         &ws_dir,
+        &blob_dir,
         &matter_id,
         &source_id,
         &anchor_kind,

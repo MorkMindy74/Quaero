@@ -73,6 +73,9 @@ pub enum StoreError {
     Corrupt { id: String, reason: String },
     /// The imported file exceeds the size cap.
     TooLarge { limit: u64, actual: u64 },
+    /// A referenced stored file is missing, or its bytes no longer match the
+    /// recorded digest/length — so an Excerpt cannot be pinned to it (#8B).
+    EvidenceIntegrity { source: String, reason: String },
     /// Filesystem error.
     Io(String),
 }
@@ -87,6 +90,12 @@ impl std::fmt::Display for StoreError {
             StoreError::Corrupt { id, reason } => write!(f, "corrupt workspace {id}: {reason}"),
             StoreError::TooLarge { limit, actual } => {
                 write!(f, "file too large: {actual} bytes (limit {limit})")
+            }
+            StoreError::EvidenceIntegrity { source, reason } => {
+                write!(
+                    f,
+                    "evidence integrity failure for source {source}: {reason}"
+                )
             }
             StoreError::Io(msg) => write!(f, "filesystem error: {msg}"),
         }
@@ -498,14 +507,17 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// - the excerpt id is **generated server-side** (path-safe, never from input)
 ///   and regenerated on the rare collision with an existing excerpt id;
 /// - `created_at` (RFC3339 UTC) is stamped **here** — the core stays clock-free;
-/// - if the referenced Fonte carries a [`StoredFile`], the excerpt is
-///   **auto-pinned** to its `sha256` (Evidence integrity); a fileless Fonte gets
-///   no pin;
+/// - if the referenced Fonte carries a [`StoredFile`], the actual blob bytes are
+///   **re-hashed under the lock** and the excerpt is pinned to that freshly
+///   computed digest; a missing blob, or bytes disagreeing with the recorded
+///   digest/length, fail with [`StoreError::EvidenceIntegrity`] (no tautological
+///   pin). A fileless Fonte gets no pin;
 /// - persisted via the atomic [`update`] (unique temp + rename);
 /// - empty quote/anchor and referential integrity are enforced by the core.
 #[allow(clippy::too_many_arguments)]
 pub fn add_excerpt(
     base: &Path,
+    files_dir: &Path,
     matter_id: &str,
     source_id: &str,
     anchor_kind: &str,
@@ -515,6 +527,7 @@ pub fn add_excerpt(
 ) -> Result<WorkspaceView, StoreError> {
     add_excerpt_with(
         base,
+        files_dir,
         matter_id,
         source_id,
         anchor_kind,
@@ -531,6 +544,7 @@ pub fn add_excerpt(
 #[allow(clippy::too_many_arguments)]
 fn add_excerpt_with(
     base: &Path,
+    files_dir: &Path,
     matter_id: &str,
     source_id: &str,
     anchor_kind: &str,
@@ -553,11 +567,35 @@ fn add_excerpt_with(
     }
     let workspace = load_consistent(&ws_path)?;
 
-    // The referenced Fonte must exist; if it carries a file, pin the excerpt to
-    // its digest (Evidence). A missing source yields no pin and the canonical
-    // validation below rejects it as a dangling excerpt.
-    let source = workspace.sources().iter().find(|s| s.id.0 == source_id);
-    let pin = source.and_then(|s| s.file.as_ref().map(|f| f.sha256.clone()));
+    // The referenced Fonte must exist; if it carries a file, the excerpt is
+    // pinned to a FRESHLY COMPUTED digest of the actual stored bytes (Evidence).
+    // We read + hash the blob under the per-matter lock and fail if it is missing
+    // or disagrees with the recorded digest/length — so a tampered/stale blob can
+    // never receive a tautological pin. A fileless Fonte gets no pin; a missing
+    // source yields no pin and the canonical validation below rejects it as a
+    // dangling excerpt.
+    let pin = match workspace.sources().iter().find(|s| s.id.0 == source_id) {
+        Some(source) => match source.file.as_ref() {
+            Some(file) => {
+                let blob = files_dir.join(&matter_stem).join(&file.stored_name);
+                let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+                    source: source_id.to_string(),
+                    reason: "stored file missing or unreadable".to_string(),
+                })?;
+                let digest = sha256_hex(&bytes);
+                if bytes.len() as u64 != file.byte_len || digest != file.sha256 {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file bytes do not match the recorded digest/length"
+                            .to_string(),
+                    });
+                }
+                Some(digest)
+            }
+            None => None,
+        },
+        None => None,
+    };
 
     // Allocate an excerpt id not already used by this workspace.
     let taken: HashSet<String> = workspace
@@ -1226,6 +1264,7 @@ mod tests {
 
         let after = add_excerpt(
             ws.path(),
+            files.path(),
             "m",
             &sid,
             "clausola",
@@ -1252,15 +1291,17 @@ mod tests {
     #[test]
     fn add_excerpt_to_missing_matter_is_not_found() {
         let ws = tempdir().unwrap();
-        let r = add_excerpt(ws.path(), "nope", "s1", "k", "v", "q", None);
+        let files = tempdir().unwrap();
+        let r = add_excerpt(ws.path(), files.path(), "nope", "s1", "k", "v", "q", None);
         assert!(matches!(r, Err(StoreError::NotFound(_))));
     }
 
     #[test]
     fn add_excerpt_to_unknown_source_is_rejected() {
         let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
         create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
-        let r = add_excerpt(ws.path(), "m", "ghost", "k", "v", "q", None);
+        let r = add_excerpt(ws.path(), files.path(), "m", "ghost", "k", "v", "q", None);
         assert!(matches!(r, Err(StoreError::Domain(_))));
     }
 
@@ -1271,7 +1312,7 @@ mod tests {
         create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
         let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"x").unwrap();
         let sid = view.sources[0].id.0.clone();
-        let r = add_excerpt(ws.path(), "m", &sid, "k", "v", "   ", None);
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "   ", None);
         assert!(matches!(r, Err(StoreError::Domain(_))));
         assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
     }
@@ -1294,14 +1335,85 @@ mod tests {
         let mut gen = move || seq.next().unwrap();
         let now = || "2026-06-01T10:00:00Z".to_string();
 
-        add_excerpt_with(ws.path(), "m", &sid, "k", "v", "q1", None, &mut gen, &now).unwrap();
-        let after =
-            add_excerpt_with(ws.path(), "m", &sid, "k", "v", "q2", None, &mut gen, &now).unwrap();
+        add_excerpt_with(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "k",
+            "v",
+            "q1",
+            None,
+            &mut gen,
+            &now,
+        )
+        .unwrap();
+        let after = add_excerpt_with(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "k",
+            "v",
+            "q2",
+            None,
+            &mut gen,
+            &now,
+        )
+        .unwrap();
 
         let ids: Vec<String> = after.excerpts.iter().map(|e| e.id().0.clone()).collect();
         assert_eq!(after.excerpts.len(), 2);
         assert!(ids.contains(&"exc-1".to_string()));
         assert!(ids.contains(&"exc-2".to_string()));
         assert_eq!(after.excerpts[0].created_at(), Some("2026-06-01T10:00:00Z"));
+    }
+
+    #[test]
+    fn add_excerpt_rejects_a_tampered_blob_and_persists_nothing() {
+        // Regression for the Codex BLOCKER: the auto-pin must verify the actual
+        // stored bytes, not trust the recorded metadata.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view =
+            import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Tamper the blob on disk AFTER import (bytes no longer match metadata).
+        let blob = files.path().join("m").join(&stored_name);
+        fs::write(&blob, b"TAMPERED BYTES").unwrap();
+
+        let r = add_excerpt(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "clausola",
+            "7.2",
+            "q",
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        // Nothing persisted — no stale pin slipped through.
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_a_missing_blob() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"bytes").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Delete the blob; the recorded metadata is now dangling.
+        fs::remove_file(files.path().join("m").join(&stored_name)).unwrap();
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
     }
 }
