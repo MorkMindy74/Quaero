@@ -207,10 +207,11 @@ test("#9 the Verifica tab shows the verdict and findings of the open workspace",
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Verifica" }));
 
-  await waitFor(() =>
-    expect(within(context).getByText(/Catena con 1 avvisi/)).toBeInTheDocument(),
-  );
-  expect(within(context).getByText(/Estratto non citato/)).toBeInTheDocument();
+  // Scope to the tab panel: the compact verdict also appears in "Stato Pratica"
+  // (above the tabs), so query the panel specifically here.
+  const panel = within(context).getByRole("tabpanel");
+  await waitFor(() => expect(within(panel).getByText(/Catena con 1 avvisi/)).toBeInTheDocument());
+  expect(within(panel).getByText(/Estratto non citato/)).toBeInTheDocument();
 });
 
 test("#8B creating an Estratto from the UI calls add_excerpt and shows it", async () => {
@@ -564,6 +565,70 @@ test("edit/delete: deleting a CITED excerpt calls delete_excerpt (not delete_cit
   expect(excerptDeleteCalled).toBe(true);
   expect(citationDeleteCalled).toBe(false);
   expect(within(context).getByText(/Affermazione collegata/)).toBeInTheDocument();
+});
+
+test("pilot UX: Stato Pratica shows counts, verdict and the next step (export stage)", async () => {
+  const view = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [],
+    excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "q" }],
+    citations: [{ id: "c1", claim: "Affermazione.", excerptId: "e1" }],
+    verification: {
+      summary: {
+        citations: 1,
+        excerpts: 1,
+        documentBackedExcerpts: 1,
+        pinnedExcerpts: 1,
+        warnings: 0,
+        infos: 0,
+      },
+      findings: [],
+    },
+  };
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return view;
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const status = await screen.findByTestId("pratica-status");
+  expect(status).toHaveTextContent("Fonti: 1 · Estratti: 1 · Citazioni: 1");
+  expect(status).toHaveTextContent("Verifica: Catena coerente");
+  expect(status).toHaveTextContent("Puoi esportare il report Markdown grounded.");
+});
+
+test("pilot UX: next step guides to create the first Estratto when there are sources but none", async () => {
+  const view = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [],
+    excerpts: [],
+    citations: [],
+    verification: {
+      summary: { citations: 0, excerpts: 0, documentBackedExcerpts: 0, pinnedExcerpts: 0, warnings: 0, infos: 0 },
+      findings: [],
+    },
+  };
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return view;
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const status = await screen.findByTestId("pratica-status");
+  expect(status).toHaveTextContent("Estratti: 0");
+  expect(status).toHaveTextContent("Crea il primo Estratto da una Fonte.");
+});
+
+test("pilot UX: Stato Pratica is not shown until a Pratica is open", () => {
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [];
+  });
+  render(<AppShell />);
+  expect(screen.queryByTestId("pratica-status")).not.toBeInTheDocument();
 });
 
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {

@@ -52,8 +52,11 @@ test("the Excerpts tab shows an empty state when no workspace is open (#8, no mo
   render(<App />);
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  // #8: real Estratti come only from an opened workspace; otherwise empty state
-  expect(within(context).getByText("Nessun estratto.")).toBeInTheDocument();
+  // #8: real Estratti come only from an opened workspace; otherwise a contextual
+  // empty state guides the user (pilot UX).
+  expect(
+    within(context).getByText("Importa prima un documento (tab Fonti)."),
+  ).toBeInTheDocument();
 });
 
 test("the genealogy tab shows the normative genealogy mock", () => {

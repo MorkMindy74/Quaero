@@ -4,6 +4,7 @@ import { TabButton, Button } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
+import { nextActionKey } from "../../lib/pilot";
 import {
   workspaceView,
   reasoningSteps,
@@ -237,7 +238,9 @@ function ExcerptsTab({
       )}
 
       {excerpts.length === 0 ? (
-        <p className="text-sm text-muted">{t("empty.excerpts")}</p>
+        <p className="text-sm text-muted">
+          {sources.length === 0 ? t("pilot.empty.noSources") : t("pilot.empty.noExcerpts")}
+        </p>
       ) : (
         excerpts.map((ex) => (
           <div key={ex.id} className="rounded border border-hairline bg-panel p-2">
@@ -430,6 +433,41 @@ function SourcesTab({
   );
 }
 
+// Pilot-readiness: a compact "Stato Pratica" shown at the top of the panel when a
+// real Pratica is open. Pure derivation from the view (counts + #9 verdict) plus
+// the next suggested step along Fonti → Estratti → Citazioni → Export.
+function PraticaStatus({ workspace }: { workspace: WorkspaceView }) {
+  const { t } = useTranslation();
+  // Defensive: the canonical view always carries these arrays, but be lenient
+  // with partial fixtures (count what's present).
+  const sources = workspace.sources?.length ?? 0;
+  const excerpts = workspace.excerpts?.length ?? 0;
+  const citations = workspace.citations?.length ?? 0;
+  const v = workspace.verification;
+  const verdict = v
+    ? v.summary.warnings === 0
+      ? t("verify.coherent")
+      : t("verify.withWarnings", { count: v.summary.warnings })
+    : "—";
+  const action = t(nextActionKey({ sources, excerpts, citations }));
+  return (
+    <div
+      data-testid="pratica-status"
+      className="border-b border-hairline bg-panel px-3 py-2 text-xs"
+    >
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-muted">
+        {t("pilot.status.title")}
+      </div>
+      <div className="text-muted">{t("pilot.status.counts", { sources, excerpts, citations })}</div>
+      <div className="text-muted">{t("pilot.status.verify", { verdict })}</div>
+      <div className="mt-1">
+        <span className="text-muted">{t("pilot.status.next")} </span>
+        <span className="text-ink">{action}</span>
+      </div>
+    </div>
+  );
+}
+
 // Spec §3 comp 05 + §5: permanent evidence/control panel. Default = Sources.
 // #5C: when a real workspace is open it drives the Sources tab; otherwise the
 // panel falls back to the #3 mock view (no regression to the shell demo).
@@ -494,6 +532,7 @@ export function RightContextPanel({
       aria-label={t("context.aria")}
       className="flex min-h-0 flex-col border-l border-hairline bg-panel-2"
     >
+      {workspace && <PraticaStatus workspace={workspace} />}
       <div className="space-y-2 border-b border-hairline px-3 py-2">
         {GROUPS.map((group) => (
           <div key={group.label}>
