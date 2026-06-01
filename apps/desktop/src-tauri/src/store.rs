@@ -1219,8 +1219,8 @@ mod tests {
         let ws = tempdir().unwrap();
         let files = tempdir().unwrap();
         create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
-        let view = import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf")
-            .unwrap();
+        let view =
+            import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf").unwrap();
         let sid = view.sources[0].id.0.clone();
         let sha = view.sources[0].file.as_ref().unwrap().sha256.clone();
 

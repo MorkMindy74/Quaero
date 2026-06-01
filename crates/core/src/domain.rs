@@ -403,7 +403,15 @@ impl Excerpt {
         note: Option<String>,
         created_at: Option<String>,
     ) -> Result<Self, ExcerptError> {
-        Self::build(id, source_id, anchor, quote, source_sha256, note, created_at)
+        Self::build(
+            id,
+            source_id,
+            anchor,
+            quote,
+            source_sha256,
+            note,
+            created_at,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1626,8 +1634,14 @@ mod tests {
 
     #[test]
     fn excerpt_new_carries_no_meta() {
-        let ex = Excerpt::new("e1", SourceId::new("s1"), anchor("clausola", "7.2"), "q", None)
-            .unwrap();
+        let ex = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("clausola", "7.2"),
+            "q",
+            None,
+        )
+        .unwrap();
         assert_eq!(ex.note(), None);
         assert_eq!(ex.created_at(), None);
     }
@@ -1743,8 +1757,7 @@ mod tests {
         ));
 
         // Duplicate id rejected.
-        let dup =
-            Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "q2", None).unwrap();
+        let dup = Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "q2", None).unwrap();
         assert!(matches!(
             ws.with_excerpt(dup),
             Err(WorkspaceError::DuplicateExcerptId(_))
