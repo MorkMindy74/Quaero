@@ -627,6 +627,51 @@ test("pilot UX: next step guides to create the first Estratto when there are sou
   expect(status).toHaveTextContent("Crea il primo Estratto da una Fonte.");
 });
 
+test("pilot UX: the Prossima azione callout updates live when the chain changes", async () => {
+  const base = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] }],
+    excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "q" }],
+    citations: [],
+    verification: {
+      summary: { citations: 0, excerpts: 1, documentBackedExcerpts: 0, pinnedExcerpts: 0, warnings: 0, infos: 0 },
+      findings: [],
+    },
+  };
+  const withCitation = { ...base, citations: [{ id: "c1", claim: "Affermazione.", excerptId: "e1" }] };
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return base;
+    if (cmd === "add_citation") return withCitation;
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const context = screen.getByTestId("region-context");
+
+  // Initial state: excerpts>0, citations=0 → "Aggiungi una Citazione…"
+  expect(await within(context).findByTestId("next-action")).toHaveTextContent(
+    "Aggiungi una Citazione per trasformare un Estratto in un'affermazione.",
+  );
+
+  // Add a citation through the UI → the open view changes.
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "+ Cita" }));
+  const dialog = await screen.findByRole("dialog", { name: "Nuova Citazione" });
+  fireEvent.change(within(dialog).getByLabelText("Affermazione (claim)"), {
+    target: { value: "Affermazione." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Salva Citazione" }));
+
+  // The callout text must update live to the export step.
+  await waitFor(() =>
+    expect(within(context).getByTestId("next-action")).toHaveTextContent(
+      "Puoi esportare il report Markdown grounded.",
+    ),
+  );
+});
+
 test("pilot UX: Stato Pratica is not shown until a Pratica is open", () => {
   mockIPC((cmd) => {
     if (cmd === "search_workspaces") return [];
