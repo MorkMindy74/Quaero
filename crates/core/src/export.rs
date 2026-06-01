@@ -120,7 +120,9 @@ fn source_line(source: Option<&SourceRef>, pin: Option<&str>) -> String {
         Some(s) => {
             let sha = pin
                 .or(s.file.as_ref().map(|f| f.sha256.as_str()))
-                .map(|h| format!(" · sha256 {}", short_sha(h)))
+                // The digest is persisted data → treat as untrusted: escape before
+                // emission so a corrupted JSON cannot inject active Markdown.
+                .map(|h| format!(" · sha256 {}", escape_md(&short_sha(h))))
                 .unwrap_or_default();
             format!(
                 "{} ({}){}",
@@ -222,7 +224,7 @@ pub fn workspace_to_markdown(ws: &Workspace) -> String {
             let sha = sr
                 .file
                 .as_ref()
-                .map(|f| format!(" · sha256 {}", short_sha(&f.sha256)))
+                .map(|f| format!(" · sha256 {}", escape_md(&short_sha(&f.sha256))))
                 .unwrap_or_default();
             out.push_str(&format!(
                 "- {} ({}){}\n",
@@ -422,6 +424,30 @@ mod tests {
         assert!(md.contains("\\# heading"));
         assert!(!md.contains("> # heading"));
         assert!(md.contains("\\| pipe"));
+    }
+
+    #[test]
+    fn hostile_digest_is_escaped_in_export() {
+        // A corrupted/hostile persisted sha256 (not hex) must not become active
+        // Markdown when displayed. Built in-memory (load-time hex validation is
+        // tested separately in the store).
+        let hostile_sha = "![](https:a)"; // 12 chars → short_sha keeps it as-is
+        let ws = Workspace::new_with_evidence(
+            client(),
+            matter(),
+            vec![doc("s1", "Atto.pdf", hostile_sha)],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let md = workspace_to_markdown(&ws);
+        assert!(
+            !md.contains("]("),
+            "digest must not yield active link/image"
+        );
+        assert!(!md.contains("!["));
+        assert!(md.contains("\\!\\[\\]\\(https:a\\)"));
     }
 
     #[test]

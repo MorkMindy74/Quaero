@@ -180,6 +180,14 @@ fn is_safe_stored_name(name: &str) -> bool {
     )
 }
 
+/// A real sha256 digest: exactly 64 ASCII hex chars. Persisted digests come from
+/// JSON and are otherwise free text — validating them at load keeps "a sha256 is
+/// a sha256" an invariant (no free text masquerading as a digest, e.g. active
+/// Markdown in a later export).
+fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Resolve the on-disk path for a workspace id, rejecting unsafe ids first.
 fn workspace_path(base: &Path, id: &str) -> Result<PathBuf, StoreError> {
     let stem = safe_file_stem(id)?;
@@ -307,6 +315,26 @@ fn load_consistent(path: &Path) -> Result<Workspace, StoreError> {
                         "stored file byteLen {} exceeds the limit {MAX_IMPORT_BYTES}",
                         file.byte_len
                     ),
+                });
+            }
+            // A persisted digest must be a real sha256 (64 hex), not free text —
+            // otherwise a corrupted JSON could carry e.g. active Markdown that a
+            // later export would render.
+            if !is_valid_sha256(&file.sha256) {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!("invalid stored file sha256 {:?}", file.sha256),
+                });
+            }
+        }
+    }
+    // Same invariant for any Excerpt sha-pin loaded from the JSON.
+    for excerpt in ws.excerpts() {
+        if let Some(sha) = excerpt.source_sha256() {
+            if !is_valid_sha256(sha) {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!("invalid excerpt sourceSha256 {sha:?}"),
                 });
             }
         }
@@ -1992,6 +2020,36 @@ mod tests {
         assert!(matches!(
             workspace_markdown(ws.path(), "nope"),
             Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn load_consistent_rejects_invalid_sha256() {
+        let dir = tempdir().unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("s1"),
+                kind: SourceType::Documento,
+                title: "x".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: "doc-1-1.pdf".to_string(),
+                    original_name: "x".to_string(),
+                    byte_len: 3,
+                    sha256: "![](https:a)".to_string(), // free text, not 64 hex
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir.path(), &ws).unwrap();
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
         ));
     }
 }
