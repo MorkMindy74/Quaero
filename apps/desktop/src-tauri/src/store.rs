@@ -127,17 +127,54 @@ fn safe_file_stem(id: &str) -> Result<&str, StoreError> {
 
 /// A persisted `StoredFile.stored_name` is generated safely at import, but it is
 /// a plain string in the canonical model — a hostile/corrupt JSON could set it
-/// to a traversal/absolute path. Anywhere we turn it into a filesystem path we
-/// require a **bare filename**: non-empty, no `..`, no `/`/`\`/NUL, not absolute,
-/// exactly one path component.
+/// to a traversal/absolute path or a Windows device. Anywhere we turn it into a
+/// filesystem path we require a **bare, non-special filename**:
+/// - non-empty, no `..`, no `/`/`\`/NUL/`:`, not absolute, exactly one component;
+/// - no trailing `.`/space (Windows strips these, changing the target);
+/// - not a reserved DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`,
+///   `LPT1..9`), case-insensitive, including with an extension (e.g. `CON.txt`),
+///   because on Windows those resolve to a device even under a normal directory.
 fn is_safe_stored_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains("..")
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
-        && !Path::new(name).is_absolute()
-        && Path::new(name).components().count() == 1
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name.contains(':')
+        || name.ends_with('.')
+        || name.ends_with(' ')
+        || Path::new(name).is_absolute()
+        || Path::new(name).components().count() != 1
+    {
+        return false;
+    }
+    // The device name is the part before the first `.` (so `NUL.txt` is unsafe).
+    let base = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    !matches!(
+        base.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 /// Resolve the on-disk path for a workspace id, rejecting unsafe ids first.
@@ -1529,7 +1566,9 @@ mod tests {
 
     #[test]
     fn is_safe_stored_name_accepts_generated_rejects_hostile() {
+        // import-generated names must keep passing
         assert!(is_safe_stored_name("doc-123-0.pdf"));
+        assert!(is_safe_stored_name("doc-4567-12.docx"));
         assert!(is_safe_stored_name("exc.bin"));
         for bad in [
             "",
@@ -1541,8 +1580,46 @@ mod tests {
             "/abs",
             "/etc/passwd",
             "with\0nul",
+            // Windows drive / ADS separator
+            "C:",
+            "C:foo",
+            "file.txt:stream",
+            // trailing dot / space (Windows strips these)
+            "file.",
+            "file ",
+            // reserved DOS device names, with and without extension, any case
+            "NUL",
+            "CON",
+            "con",
+            "Aux",
+            "PRN",
+            "COM1",
+            "COM1.txt",
+            "lpt1",
+            "LPT1.pdf",
+            "NUL.docx",
         ] {
             assert!(!is_safe_stored_name(bad), "must reject {bad:?}");
         }
+    }
+
+    #[test]
+    fn add_excerpt_rejects_reserved_device_stored_name() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        // A hostile JSON pointing the blob at a Windows console device.
+        plant_workspace_with_stored_name(dir.path(), "CON");
+        let before = fs::read_to_string(dir.path().join("m.json")).unwrap();
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(r.is_err(), "a reserved device storedName must be rejected");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("m.json")).unwrap(),
+            before
+        );
+        // and it is intercepted at load too
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
     }
 }
