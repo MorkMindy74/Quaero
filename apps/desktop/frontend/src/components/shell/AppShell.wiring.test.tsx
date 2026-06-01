@@ -476,7 +476,7 @@ test("edit/delete: 'Modifica' on an excerpt edits it via update_excerpt", async 
   fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  fireEvent.click(await within(context).findByRole("button", { name: "Modifica" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "Modifica Estratto" }));
 
   const dialog = await screen.findByRole("dialog", { name: "Modifica Estratto" });
   const quote = within(dialog).getByLabelText("Testo dell'Estratto");
@@ -513,8 +513,8 @@ test("edit/delete: deleting a citation needs a two-step confirm", async () => {
   fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  // the citation's "Elimina" is the first one (its row renders before the excerpt action row)
-  fireEvent.click((await within(context).findAllByRole("button", { name: "Elimina" }))[0]);
+  // explicit, unambiguous label for the citation delete
+  fireEvent.click(await within(context).findByRole("button", { name: "Elimina Citazione" }));
   // a confirm step appears; nothing deleted yet
   expect(deleted).toBeNull();
   fireEvent.click(within(context).getByRole("button", { name: "Sì" }));
@@ -523,27 +523,36 @@ test("edit/delete: deleting a citation needs a two-step confirm", async () => {
   expect(deleted!.citationId).toBe("c1");
 });
 
-test("edit/delete: deleting a cited excerpt is blocked with a clear message", async () => {
+test("edit/delete: deleting a CITED excerpt calls delete_excerpt (not delete_citation), is blocked, and nothing disappears", async () => {
+  let excerptDeleteCalled = false;
+  let citationDeleteCalled = false;
   const base = {
     client: { id: "alfa", name: "Alfa S.r.l." },
     matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
     sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
     dossiers: [],
     excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "q" }],
-    citations: [{ id: "c1", claim: "Affermazione.", excerptId: "e1" }],
+    citations: [{ id: "c1", claim: "Affermazione collegata.", excerptId: "e1" }],
   };
   mockIPC((cmd) => {
     if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
     if (cmd === "open_workspace") return base;
-    if (cmd === "delete_excerpt") throw new Error("excerpt e1 is cited by c1");
+    if (cmd === "delete_excerpt") {
+      excerptDeleteCalled = true;
+      throw new Error("excerpt e1 is cited by c1"); // backend blocks
+    }
+    if (cmd === "delete_citation") {
+      citationDeleteCalled = true;
+      return { ...base, citations: [] };
+    }
   });
   render(<AppShell />);
   fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  // the excerpt's "Elimina" is the last one (after the citation row)
-  const eliminaButtons = await within(context).findAllByRole("button", { name: "Elimina" });
-  fireEvent.click(eliminaButtons[eliminaButtons.length - 1]);
+
+  // Click the EXCERPT delete (explicit label) → confirm → blocked.
+  fireEvent.click(await within(context).findByRole("button", { name: "Elimina Estratto" }));
   fireEvent.click(within(context).getByRole("button", { name: "Sì" }));
 
   await waitFor(() =>
@@ -551,6 +560,10 @@ test("edit/delete: deleting a cited excerpt is blocked with a clear message", as
       within(context).getByText("Estratto citato: elimina prima le Citazioni collegate."),
     ).toBeInTheDocument(),
   );
+  // delete_excerpt was called; delete_citation was NOT; the citation is still shown.
+  expect(excerptDeleteCalled).toBe(true);
+  expect(citationDeleteCalled).toBe(false);
+  expect(within(context).getByText(/Affermazione collegata/)).toBeInTheDocument();
 });
 
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {

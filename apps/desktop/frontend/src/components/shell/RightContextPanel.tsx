@@ -172,11 +172,16 @@ function ExcerptsTab({
     }
   };
 
-  // A small "Elimina → Confermi? Sì/Annulla" inline control.
-  const deleteControl = (kind: "excerpt" | "citation", id: string) =>
-    confirm && confirm.kind === kind && confirm.id === id ? (
-      <span className="text-[11px]">
-        {t("evidence.confirmDelete")}{" "}
+  // A small "Elimina X → Confermi eliminazione X? Sì/Annulla" inline control.
+  // Labels are kind-specific so the Estratto and Citazione actions are never
+  // ambiguous even when shown close together.
+  const deleteControl = (kind: "excerpt" | "citation", id: string) => {
+    const deleteLabel = kind === "excerpt" ? t("evidence.deleteExcerpt") : t("evidence.deleteCitation");
+    const confirmLabel =
+      kind === "excerpt" ? t("evidence.confirmDeleteExcerpt") : t("evidence.confirmDeleteCitation");
+    return confirm && confirm.kind === kind && confirm.id === id ? (
+      <span className="text-[11px] text-accent-warning">
+        {confirmLabel}{" "}
         <button type="button" className={linkBtn} onClick={() => void confirmDelete(kind, id)}>
           {t("evidence.yes")}
         </button>{" "}
@@ -193,9 +198,10 @@ function ExcerptsTab({
           setConfirm({ kind, id });
         }}
       >
-        {t("evidence.delete")}
+        {deleteLabel}
       </button>
     );
+  };
 
   return (
     <div className="space-y-3">
@@ -254,13 +260,14 @@ function ExcerptsTab({
                       className={linkBtn}
                       onClick={() => setEditingCitation({ citation: c, excerpt: ex })}
                     >
-                      {t("evidence.edit")}
+                      {t("evidence.editCitation")}
                     </button>
                   )}
                   {onDeleteCitation && deleteControl("citation", c.id)}
                 </div>
               ))}
-            <div className="mt-1 flex flex-wrap items-center gap-2">
+            {/* Excerpt-level actions, separated from the per-citation actions above. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-hairline pt-2">
               {onAddCitation && (
                 <button type="button" onClick={() => setCiting(ex)} className={linkBtn}>
                   {t("citations.cite")}
@@ -268,7 +275,7 @@ function ExcerptsTab({
               )}
               {onUpdateExcerpt && (
                 <button type="button" onClick={() => setEditingExcerpt(ex)} className={linkBtn}>
-                  {t("evidence.edit")}
+                  {t("evidence.editExcerpt")}
                 </button>
               )}
               {onDeleteExcerpt && deleteControl("excerpt", ex.id)}
