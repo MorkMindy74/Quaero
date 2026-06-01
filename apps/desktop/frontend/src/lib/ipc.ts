@@ -53,6 +53,30 @@ export function importDocument(
   return invoke<WorkspaceView>("import_document", { matterId, originalName, bytes });
 }
 
+// --- #8B manual Evidence: create an Estratto linked to a Fonte --------------
+
+/** Create a manual Estratto (#8B) linked to a Fonte of an existing Pratica.
+ *  The excerpt id and `createdAt` timestamp are generated server-side; if the
+ *  Fonte has a stored file the excerpt is auto-pinned to its sha256. Returns the
+ *  updated view so the caller can refresh the Estratti list. */
+export function addExcerpt(args: {
+  matterId: string;
+  sourceId: string;
+  anchorKind: string;
+  anchorValue: string;
+  quote: string;
+  note?: string;
+}): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("add_excerpt", {
+    matterId: args.matterId,
+    sourceId: args.sourceId,
+    anchorKind: args.anchorKind,
+    anchorValue: args.anchorValue,
+    quote: args.quote,
+    note: args.note ?? null,
+  });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */
