@@ -31,6 +31,29 @@ Ogni modifica — feature, slice, hotfix, doc — passa da un branch dedicato e 
 
 La CI (`.github/workflows/ci.yml`) esegue esattamente questi gate.
 
+## Smoke test umano prima del merge (regola stabile)
+
+I gate automatici **non bastano** per le feature che cambiano il comportamento a
+runtime o che l'utente vede/usa direttamente. **Ogni feature visibile, rischiosa
+o che introduce nuovo comportamento runtime richiede uno smoke test umano prima
+del merge.** Vale in particolare per:
+
+- provider LLM **reale** (locale o remoto);
+- OSINT / raccolta dati;
+- export **DOCX/PDF**;
+- import / parsing documenti;
+- UI importante;
+- privacy/security a **runtime**;
+- accesso **byte/filesystem**;
+- **dati cliente**;
+- connettori esterni.
+
+Lo smoke test è una verifica manuale del comportamento reale (non solo test
+verdi): si avvia l'app/funzione e si osserva l'esito atteso. Va fatto **prima**
+del merge; se per ragioni di processo non è stato possibile (regola introdotta
+dopo l'apertura della PR), va eseguito **subito dopo il merge e prima di iniziare
+qualunque altra slice**, annotandolo nel checkpoint.
+
 ## Ambiente Windows
 
 I comandi `cargo` richiedono l'ambiente VS Build Tools caricato: usare la
