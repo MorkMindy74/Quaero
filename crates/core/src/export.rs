@@ -26,48 +26,81 @@ fn source_type_label(kind: &SourceType) -> &'static str {
     }
 }
 
-/// Minimal inline escape: collapse newlines/tabs to spaces and neutralise
-/// backslash and backtick so client text cannot open a code span or break the
-/// line. Deliberately conservative — readable, not typographically perfect.
-fn inline(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Make untrusted (client-authored) text **inert** in a Markdown/HTML previewer.
+///
+/// HTML-encodes `&`, `<`, `>` so raw HTML and autolinks cannot activate (no
+/// `<img>`/`<script>` execution, no `<http://…>` beacon), and backslash-escapes
+/// Markdown-active punctuation (code, emphasis, links, images, heading, pipe,
+/// backslash) so it renders as literal text. The output therefore contains no
+/// character that can open HTML or active Markdown.
+fn escape_md(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
     for ch in s.chars() {
         match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
             '\\' => out.push_str("\\\\"),
             '`' => out.push_str("\\`"),
-            '\n' | '\r' | '\t' => out.push(' '),
+            '*' => out.push_str("\\*"),
+            '_' => out.push_str("\\_"),
+            '[' => out.push_str("\\["),
+            ']' => out.push_str("\\]"),
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            '#' => out.push_str("\\#"),
+            '|' => out.push_str("\\|"),
+            '~' => out.push_str("\\~"),
+            '!' => out.push_str("\\!"),
             c => out.push(c),
         }
     }
-    out.trim().to_string()
+    out
 }
 
-/// Render `s` as a Markdown blockquote: each physical line prefixed with `> `,
-/// with the same minimal escaping applied per line. Always ends with a blank line.
+/// Inline escape for headings/list-item contexts: collapse line breaks/tabs to
+/// spaces, then make the text inert (see [`escape_md`]).
+fn inline(s: &str) -> String {
+    let collapsed: String = s
+        .chars()
+        .map(|c| {
+            if c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    escape_md(collapsed.trim())
+}
+
+/// Render `s` as a Markdown blockquote: each physical line is made inert and
+/// prefixed with `> `. Encoding `<`/`>`/`&` and escaping `#` etc. prevents any
+/// break-out of the quote (no nested HTML, heading, list or autolink). Tabs are
+/// collapsed so a leading tab cannot start an indented code block. Ends with a
+/// blank line.
 fn blockquote(s: &str) -> String {
     let mut out = String::new();
-    for line in s.split('\n') {
-        let escaped: String = line
+    for raw in s.split('\n') {
+        let line: String = raw
             .chars()
-            .map(|c| match c {
-                '\\' => "\\\\".to_string(),
-                '`' => "\\`".to_string(),
-                '\r' | '\t' => " ".to_string(),
-                c => c.to_string(),
-            })
+            .map(|c| if c == '\t' || c == '\r' { ' ' } else { c })
             .collect();
         out.push_str("> ");
-        out.push_str(escaped.trim_end());
+        out.push_str(escape_md(&line).trim_end());
         out.push('\n');
     }
     out.push('\n');
     out
 }
 
-/// First 12 hex chars of a sha256 (+ ellipsis), for compact display.
+/// First 12 hex chars of a sha256 (+ ellipsis), for compact display. Uses
+/// `chars()` (not byte slicing) so a malformed/non-ASCII persisted digest can
+/// never panic the exporter.
 fn short_sha(sha: &str) -> String {
-    if sha.len() > 12 {
-        format!("{}…", &sha[..12])
+    if sha.chars().count() > 12 {
+        let head: String = sha.chars().take(12).collect();
+        format!("{head}…")
     } else {
         sha.to_string()
     }
@@ -352,5 +385,52 @@ mod tests {
         // the multi-line quote becomes two blockquote lines
         assert!(md.contains("> riga1"));
         assert!(md.contains("> riga2 con \\`code\\`"));
+    }
+
+    #[test]
+    fn authored_html_and_links_are_inert() {
+        let hostile = "<img src=\"https://attacker.example/pixel\"> \
+                       <script>x</script> <http://attacker.example> \
+                       ![](https://attacker.example/p) [x](javascript:alert(1)) \
+                       # heading | pipe";
+        let ex = Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), hostile, None).unwrap();
+        let cit = Citation::new("c1", hostile, ExcerptId::new("e1")).unwrap();
+        let ws = Workspace::new_with_evidence(
+            client(),
+            matter(),
+            vec![doc("s1", hostile, &"ab".repeat(32))],
+            vec![],
+            vec![ex],
+            vec![cit],
+        )
+        .unwrap();
+        let md = workspace_to_markdown(&ws);
+
+        // No raw HTML / autolink survives anywhere in the output.
+        assert!(!md.contains("<img"), "raw <img must not appear");
+        assert!(!md.contains("<script"), "raw <script must not appear");
+        assert!(!md.contains("<http"), "raw autolink must not appear");
+        assert!(md.contains("&lt;img"));
+        assert!(md.contains("&lt;script&gt;"));
+        assert!(md.contains("&lt;http://attacker.example&gt;"));
+
+        // No active Markdown image/link delimiters (we never emit "](" or "![").
+        assert!(!md.contains("]("), "link/image target must be neutralised");
+        assert!(!md.contains("!["), "image syntax must be neutralised");
+
+        // Heading / pipe from authored text are escaped, not active.
+        assert!(md.contains("\\# heading"));
+        assert!(!md.contains("> # heading"));
+        assert!(md.contains("\\| pipe"));
+    }
+
+    #[test]
+    fn short_sha_does_not_panic_on_non_ascii() {
+        // Defensive: a corrupted digest with a multibyte char must not panic.
+        assert_eq!(short_sha("éàèùò"), "éàèùò");
+        let long = "é".repeat(20);
+        let out = short_sha(&long);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().filter(|c| *c == 'é').count(), 12);
     }
 }
