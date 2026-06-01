@@ -865,6 +865,24 @@ impl Workspace {
         )
     }
 
+    /// Return a new workspace with one more citation, re-validating the whole
+    /// graph: rejects a duplicate citation id or a citation pointing at a
+    /// non-existent excerpt (`DanglingCitationExcerpt`). A Citation can only ever
+    /// reference an excerpt — never a Fonte (ADR-0007, enforced by the type).
+    /// Preserves existing state; never mutates in place.
+    pub fn with_citation(self, citation: Citation) -> Result<Self, WorkspaceError> {
+        let mut citations = self.citations;
+        citations.push(citation);
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            self.excerpts,
+            citations,
+        )
+    }
+
     /// Derive the read/render view (dynamic dossiers + manual), the canonical
     /// excerpts/citations (cloned), and the citation-chain audit report (#9).
     /// All recomputed from canonical state; the verification is never persisted.
@@ -1790,6 +1808,55 @@ mod tests {
             ws.with_excerpt(bad),
             Err(WorkspaceError::ExcerptShaMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn with_citation_adds_and_revalidates_the_graph() {
+        // Workspace with a source + an excerpt to cite.
+        let ex = Excerpt::new(
+            "e1",
+            SourceId::new("s1"),
+            anchor("clausola", "7.2"),
+            "q",
+            None,
+        )
+        .unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src("s1", SourceType::Documento)],
+            vec![],
+            vec![ex],
+            vec![],
+        )
+        .unwrap();
+
+        let cit = Citation::new("c1", "Recesso con preavviso.", ExcerptId::new("e1")).unwrap();
+        let ws = ws.with_citation(cit).unwrap();
+        assert_eq!(ws.citations().len(), 1);
+        assert_eq!(ws.citations()[0].excerpt_id().0, "e1");
+
+        // Dangling: cites a non-existent excerpt.
+        let bad = Citation::new("c2", "x", ExcerptId::new("ghost")).unwrap();
+        assert!(matches!(
+            ws.clone().with_citation(bad),
+            Err(WorkspaceError::DanglingCitationExcerpt { .. })
+        ));
+
+        // Duplicate citation id.
+        let dup = Citation::new("c1", "y", ExcerptId::new("e1")).unwrap();
+        assert!(matches!(
+            ws.with_citation(dup),
+            Err(WorkspaceError::DuplicateCitationId(_))
+        ));
+    }
+
+    #[test]
+    fn citation_with_empty_claim_is_rejected() {
+        assert_eq!(
+            Citation::new("c1", "   ", ExcerptId::new("e1")),
+            Err(CitationError::EmptyClaim)
+        );
     }
 
     fn doc_with_file(id: &str, sha: &str) -> SourceRef {
