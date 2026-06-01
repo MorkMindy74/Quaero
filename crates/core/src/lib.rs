@@ -6,6 +6,7 @@
 
 pub mod chat;
 pub mod domain;
+pub mod export;
 pub mod hash;
 pub mod persistence;
 pub mod privacy;
