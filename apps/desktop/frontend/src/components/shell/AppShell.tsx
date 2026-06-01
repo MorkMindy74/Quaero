@@ -94,9 +94,9 @@ export default function AppShell() {
     }
   };
 
-  const handleExportMarkdown = async () => {
+  const handleExportMarkdown = async (): Promise<boolean> => {
     setExportError(null);
-    if (!open) return;
+    if (!open) return false;
     try {
       const md = await exportMarkdown(open.matter.id);
       // Download via Blob in the webview — no Rust file write, no save dialog.
@@ -109,8 +109,10 @@ export default function AppShell() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      return true;
     } catch {
       setExportError(t("export.error"));
+      return false;
     }
   };
 
@@ -148,7 +150,7 @@ export default function AppShell() {
           addExcerptError={addExcerptError}
           onAddCitation={open ? handleAddCitation : undefined}
           addCitationError={addCitationError}
-          onExportMarkdown={open ? () => void handleExportMarkdown() : undefined}
+          onExportMarkdown={open ? handleExportMarkdown : undefined}
           exportError={exportError}
         />
       </div>

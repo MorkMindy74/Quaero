@@ -135,6 +135,11 @@ export function NewExcerptDialog({ sources, onClose, onCreate, error }: NewExcer
           </p>
         )}
 
+        {/* Explain why "Salva" is disabled, so the button is never silently dead. */}
+        {sources.length > 0 && !busy && !canSubmit && (
+          <p className="mb-2 text-xs text-muted">{t("excerpts.required")}</p>
+        )}
+
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>
             {t("matters.cancel")}

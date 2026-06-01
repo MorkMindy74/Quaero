@@ -122,14 +122,22 @@ function ExcerptsTab({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
-  onExportMarkdown?: () => void;
+  onExportMarkdown?: () => Promise<boolean>;
   exportError?: string | null;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [citing, setCiting] = useState<Excerpt | null>(null);
+  const [exportState, setExportState] = useState<"idle" | "busy" | "done">("idle");
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
   const documentSources = sources.filter((s) => s.kind === "Documento");
+
+  const handleExport = async () => {
+    if (!onExportMarkdown) return;
+    setExportState("busy");
+    const ok = await onExportMarkdown();
+    setExportState(ok ? "done" : "idle");
+  };
 
   return (
     <div className="space-y-3">
@@ -141,11 +149,16 @@ function ExcerptsTab({
             </Button>
           )}
           {onExportMarkdown && (
-            <Button type="button" onClick={onExportMarkdown}>
-              {t("export.markdown")}
+            <Button type="button" disabled={exportState === "busy"} onClick={() => void handleExport()}>
+              {exportState === "busy" ? t("export.exporting") : t("export.markdown")}
             </Button>
           )}
         </div>
+      )}
+      {exportState === "done" && (
+        <p role="status" className="text-xs text-accent-verified">
+          {t("export.done")}
+        </p>
       )}
       {exportError && (
         <p role="alert" className="text-xs text-accent-warning">
@@ -332,7 +345,7 @@ export function RightContextPanel({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
-  onExportMarkdown?: () => void;
+  onExportMarkdown?: () => Promise<boolean>;
   exportError?: string | null;
 }) {
   const { t } = useTranslation();
