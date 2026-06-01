@@ -844,6 +844,18 @@ fn add_citation_with(
     Ok(updated.view())
 }
 
+/// Render an existing Pratica as a grounded Markdown report (#12 decomposition).
+/// Read-only: loads the canonical workspace and delegates to the pure core
+/// exporter. **No file is written** — the caller (frontend) downloads the string.
+pub fn workspace_markdown(base: &Path, matter_id: &str) -> Result<String, StoreError> {
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+    Ok(quaero_core::export::workspace_to_markdown(&workspace))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1957,5 +1969,29 @@ mod tests {
         assert_eq!(after.citations.len(), 2);
         assert!(ids.contains(&"cit-1".to_string()));
         assert!(ids.contains(&"cit-2".to_string()));
+    }
+
+    // ----- export grounded Markdown -----
+
+    #[test]
+    fn workspace_markdown_renders_the_chain() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        add_citation(ws.path(), "m", &eid, "Recesso con preavviso.").unwrap();
+        let md = workspace_markdown(ws.path(), "m").unwrap();
+        assert!(md.contains("# Quaero — Report Evidence"));
+        assert!(md.contains("**Cliente:** Alfa"));
+        assert!(md.contains("## Verifica della catena"));
+        assert!(md.contains("### «Recesso con preavviso.»"));
+        assert!(md.contains("> Il conduttore è tenuto."));
+        assert!(md.contains("## Fonti"));
+    }
+
+    #[test]
+    fn workspace_markdown_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        assert!(matches!(
+            workspace_markdown(ws.path(), "nope"),
+            Err(StoreError::NotFound(_))
+        ));
     }
 }
