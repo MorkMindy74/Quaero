@@ -905,9 +905,10 @@ fn mutate_workspace(
     Ok(updated.view())
 }
 
-/// Edit an existing Estratto (#edit/delete): change quote + anchor + note while
-/// **preserving** `sourceId`, the `sourceSha256` pin and `createdAt` — the Fonte
-/// stays the Fonte. Unknown id / empty quote/anchor → `Domain`, nothing persisted.
+/// Edit an existing Estratto (#edit/delete): change quote + anchor + note. The
+/// core's `edit_excerpt` preserves the immutable evidence (`sourceId`, the
+/// `sourceSha256` pin and `createdAt`) — the store no longer has to remember to.
+/// Unknown id / empty quote/anchor → `Domain`, nothing persisted.
 #[allow(clippy::too_many_arguments)]
 pub fn update_excerpt(
     base: &Path,
@@ -919,27 +920,16 @@ pub fn update_excerpt(
     note: Option<&str>,
 ) -> Result<WorkspaceView, StoreError> {
     mutate_workspace(base, matter_id, |workspace| {
-        let existing = workspace
-            .excerpts()
-            .iter()
-            .find(|e| e.id().0 == excerpt_id)
-            .ok_or_else(|| StoreError::Domain(format!("unknown excerpt id: {excerpt_id}")))?;
-        // Preserve the Fonte link, the pin and the creation timestamp.
-        let edited = Excerpt::new_with_meta(
-            excerpt_id,
-            existing.source_id().clone(),
-            Anchor {
-                kind: anchor_kind.to_string(),
-                value: anchor_value.to_string(),
-            },
-            quote,
-            existing.source_sha256().map(|s| s.to_string()),
-            note.map(|n| n.to_string()),
-            existing.created_at().map(|s| s.to_string()),
-        )
-        .map_err(|e| StoreError::Domain(e.to_string()))?;
         workspace
-            .replace_excerpt(edited)
+            .edit_excerpt(
+                &ExcerptId::new(excerpt_id),
+                Anchor {
+                    kind: anchor_kind.to_string(),
+                    value: anchor_value.to_string(),
+                },
+                quote,
+                note.map(|n| n.to_string()),
+            )
             .map_err(|e| StoreError::Domain(e.to_string()))
     })
 }
@@ -965,15 +955,8 @@ pub fn update_citation(
     claim: &str,
 ) -> Result<WorkspaceView, StoreError> {
     mutate_workspace(base, matter_id, |workspace| {
-        let existing = workspace
-            .citations()
-            .iter()
-            .find(|c| c.id().0 == citation_id)
-            .ok_or_else(|| StoreError::Domain(format!("unknown citation id: {citation_id}")))?;
-        let edited = Citation::new(citation_id, claim, existing.excerpt_id().clone())
-            .map_err(|e| StoreError::Domain(e.to_string()))?;
         workspace
-            .replace_citation(edited)
+            .edit_citation(&CitationId::new(citation_id), claim)
             .map_err(|e| StoreError::Domain(e.to_string()))
     })
 }
