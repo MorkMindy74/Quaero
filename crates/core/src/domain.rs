@@ -337,6 +337,8 @@ pub enum ExcerptError {
     EmptyQuote,
     /// The anchor kind or value is empty.
     EmptyAnchor,
+    /// A `created_at` timestamp was provided but is blank.
+    EmptyCreatedAt,
 }
 
 impl std::fmt::Display for ExcerptError {
@@ -344,6 +346,7 @@ impl std::fmt::Display for ExcerptError {
         match self {
             ExcerptError::EmptyQuote => write!(f, "excerpt quote must not be empty"),
             ExcerptError::EmptyAnchor => write!(f, "excerpt anchor kind/value must not be empty"),
+            ExcerptError::EmptyCreatedAt => write!(f, "excerpt createdAt must not be blank"),
         }
     }
 }
@@ -365,15 +368,53 @@ pub struct Excerpt {
     quote: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_sha256: Option<String>,
+    // Manual-capture metadata (#8B). Both additive + `skip_serializing_if` →
+    // pre-#8B excerpts keep their on-disk shape byte-for-byte. `created_at` is
+    // produced by the desktop layer (the core stays clock-free).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
 }
 
 impl Excerpt {
+    /// Backward-compatible constructor (no `note`, no `created_at`).
     pub fn new(
         id: impl Into<String>,
         source_id: SourceId,
         anchor: Anchor,
         quote: impl Into<String>,
         source_sha256: Option<String>,
+    ) -> Result<Self, ExcerptError> {
+        Self::build(id, source_id, anchor, quote, source_sha256, None, None)
+    }
+
+    /// Constructor including the manual-capture metadata (#8B): an optional
+    /// free-text `note` and a `created_at` timestamp. The timestamp is produced
+    /// by the caller (desktop layer) — the core stays clock-free and only
+    /// validates/stores it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_meta(
+        id: impl Into<String>,
+        source_id: SourceId,
+        anchor: Anchor,
+        quote: impl Into<String>,
+        source_sha256: Option<String>,
+        note: Option<String>,
+        created_at: Option<String>,
+    ) -> Result<Self, ExcerptError> {
+        Self::build(id, source_id, anchor, quote, source_sha256, note, created_at)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        id: impl Into<String>,
+        source_id: SourceId,
+        anchor: Anchor,
+        quote: impl Into<String>,
+        source_sha256: Option<String>,
+        note: Option<String>,
+        created_at: Option<String>,
     ) -> Result<Self, ExcerptError> {
         let quote = quote.into();
         if quote.trim().is_empty() {
@@ -382,12 +423,23 @@ impl Excerpt {
         if anchor.kind.trim().is_empty() || anchor.value.trim().is_empty() {
             return Err(ExcerptError::EmptyAnchor);
         }
+        // A blank note carries no information → normalise it away.
+        let note = note.filter(|n| !n.trim().is_empty());
+        // `created_at` is optional (pre-#8B excerpts have none), but if present
+        // it must not be blank.
+        if let Some(ts) = &created_at {
+            if ts.trim().is_empty() {
+                return Err(ExcerptError::EmptyCreatedAt);
+            }
+        }
         Ok(Self {
             id: ExcerptId::new(id),
             source_id,
             anchor,
             quote,
             source_sha256,
+            note,
+            created_at,
         })
     }
 
@@ -406,6 +458,12 @@ impl Excerpt {
     pub fn source_sha256(&self) -> Option<&str> {
         self.source_sha256.as_deref()
     }
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+    pub fn created_at(&self) -> Option<&str> {
+        self.created_at.as_deref()
+    }
 }
 
 /// Wire shape for [`Excerpt`]: `deny_unknown_fields` then `TryFrom` validation.
@@ -418,18 +476,24 @@ struct RawExcerpt {
     quote: String,
     #[serde(default)]
     source_sha256: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 impl TryFrom<RawExcerpt> for Excerpt {
     type Error = ExcerptError;
 
     fn try_from(raw: RawExcerpt) -> Result<Self, Self::Error> {
-        Excerpt::new(
+        Excerpt::new_with_meta(
             raw.id,
             raw.source_id,
             raw.anchor,
             raw.quote,
             raw.source_sha256,
+            raw.note,
+            raw.created_at,
         )
     }
 }
@@ -772,6 +836,23 @@ impl Workspace {
             sources,
             self.manual_dossiers,
             self.excerpts,
+            self.citations,
+        )
+    }
+
+    /// Return a new workspace with one more excerpt, re-validating the whole
+    /// graph (#8B): rejects a duplicate excerpt id, a dangling source, or a
+    /// `sourceSha256` that does not match the referenced Fonte's StoredFile.
+    /// Preserves existing sources/excerpts/citations; never mutates in place.
+    pub fn with_excerpt(self, excerpt: Excerpt) -> Result<Self, WorkspaceError> {
+        let mut excerpts = self.excerpts;
+        excerpts.push(excerpt);
+        Workspace::new_with_evidence(
+            self.client,
+            self.matter,
+            self.sources,
+            self.manual_dossiers,
+            excerpts,
             self.citations,
         )
     }
@@ -1541,6 +1622,161 @@ mod tests {
         .unwrap();
         let json = serde_json::to_string(&no_sha).unwrap();
         assert!(!json.contains("sourceSha256"));
+    }
+
+    #[test]
+    fn excerpt_new_carries_no_meta() {
+        let ex = Excerpt::new("e1", SourceId::new("s1"), anchor("clausola", "7.2"), "q", None)
+            .unwrap();
+        assert_eq!(ex.note(), None);
+        assert_eq!(ex.created_at(), None);
+    }
+
+    #[test]
+    fn excerpt_with_meta_stores_note_and_created_at() {
+        let ex = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("pagina", "3"),
+            "testo",
+            None,
+            Some("nota manuale".to_string()),
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        assert_eq!(ex.note(), Some("nota manuale"));
+        assert_eq!(ex.created_at(), Some("2026-06-01T10:00:00Z"));
+    }
+
+    #[test]
+    fn excerpt_blank_note_normalises_to_none() {
+        let ex = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("pagina", "3"),
+            "testo",
+            None,
+            Some("   ".to_string()),
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        assert_eq!(ex.note(), None);
+    }
+
+    #[test]
+    fn excerpt_blank_created_at_is_rejected() {
+        assert_eq!(
+            Excerpt::new_with_meta(
+                "e1",
+                SourceId::new("s1"),
+                anchor("k", "v"),
+                "q",
+                None,
+                None,
+                Some("   ".to_string()),
+            ),
+            Err(ExcerptError::EmptyCreatedAt)
+        );
+    }
+
+    #[test]
+    fn excerpt_meta_round_trips_camelcase() {
+        let ex = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("pagina", "3"),
+            "testo",
+            None,
+            Some("nota".to_string()),
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&ex).unwrap();
+        assert!(json.contains("\"note\":\"nota\""));
+        assert!(json.contains("\"createdAt\":\"2026-06-01T10:00:00Z\""));
+        let back: Excerpt = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ex);
+    }
+
+    #[test]
+    fn excerpt_without_meta_omits_fields_and_loads_legacy() {
+        // New excerpt without meta → fields omitted on the wire.
+        let ex = Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "q", None).unwrap();
+        let json = serde_json::to_string(&ex).unwrap();
+        assert!(!json.contains("note"));
+        assert!(!json.contains("createdAt"));
+        // Backward-compatible: pre-#8B JSON lacking the fields loads with None.
+        let legacy = r#"{"id":"e1","sourceId":"s1","anchor":{"kind":"k","value":"v"},"quote":"q"}"#;
+        let loaded: Excerpt = serde_json::from_str(legacy).unwrap();
+        assert_eq!(loaded.note(), None);
+        assert_eq!(loaded.created_at(), None);
+    }
+
+    #[test]
+    fn with_excerpt_adds_and_revalidates_the_graph() {
+        let ws = Workspace::new(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![src("s1", SourceType::Documento)],
+            vec![],
+        )
+        .unwrap();
+        let ex = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("pagina", "1"),
+            "q",
+            None,
+            Some("nota".to_string()),
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        let ws = ws.with_excerpt(ex).unwrap();
+        assert_eq!(ws.excerpts().len(), 1);
+        assert_eq!(ws.excerpts()[0].created_at(), Some("2026-06-01T10:00:00Z"));
+
+        // Dangling source rejected.
+        let bad = Excerpt::new("e2", SourceId::new("ghost"), anchor("k", "v"), "q", None).unwrap();
+        assert!(matches!(
+            ws.clone().with_excerpt(bad),
+            Err(WorkspaceError::DanglingExcerptSource { .. })
+        ));
+
+        // Duplicate id rejected.
+        let dup =
+            Excerpt::new("e1", SourceId::new("s1"), anchor("k", "v"), "q2", None).unwrap();
+        assert!(matches!(
+            ws.with_excerpt(dup),
+            Err(WorkspaceError::DuplicateExcerptId(_))
+        ));
+    }
+
+    #[test]
+    fn with_excerpt_rejects_sha_pin_mismatch() {
+        let sha = "ab".repeat(32);
+        let ws = Workspace::new_with_evidence(
+            client("alfa"),
+            matter("m", "alfa"),
+            vec![doc_with_file("s1", &sha)],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let bad = Excerpt::new_with_meta(
+            "e1",
+            SourceId::new("s1"),
+            anchor("k", "v"),
+            "q",
+            Some("cd".repeat(32)),
+            None,
+            Some("2026-06-01T10:00:00Z".to_string()),
+        )
+        .unwrap();
+        assert!(matches!(
+            ws.with_excerpt(bad),
+            Err(WorkspaceError::ExcerptShaMismatch { .. })
+        ));
     }
 
     fn doc_with_file(id: &str, sha: &str) -> SourceRef {
