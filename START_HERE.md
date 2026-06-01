@@ -8,8 +8,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 
 ## Stato attuale (2026-06-01)
 
-- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8, #9, #10 e #37 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8, #9, #10 e #37 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + Verificatore citazioni + Privacy Guard + **provider locale Ollama (opt-in, local-only fail-closed)**. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`abc8de0`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8, #8B, #9, #10 e #37 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8, #9, #10 e #37 sono CHIUSE** (e **#8B**, follow-up di #8, è consegnata): Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + **creazione Estratti da UI (Manual Evidence Capture)** + Verificatore citazioni + Privacy Guard + **provider locale Ollama (opt-in, local-only fail-closed)**. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`9fd5056`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
@@ -21,7 +21,7 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - **#8** **Citazioni ad Estratti** (cuore anti-allucinazione, ADR-0007): `Excerpt`/`Anchor`/`Citation` nel dominio canonico + persistenza + display read-only nella tab Estratti; invariante "si cita un Estratto, **mai** una Fonte" imposto dal tipo; `sourceSha256` validato contro `SourceRef.file.sha256`; retro-compatibile coi Workspace pre-#8. **PR #30 mergiata** (commit `6d496d8`). **Issue #8 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità `sourceSha256`) → fix → giro 2 `approve`.
 - **#9** **Verificatore citazioni** (audit & spiegabilità): `verify(&Workspace)` **puro/deterministico** in `quaero-core::verify` → report **derivato** in `WorkspaceView` (mai persistito; `Workspace` canonico invariato); findings `Info`/`Warning` (niente `Error`) — `OrphanExcerpt`, `UnpinnedDocumentExcerpt` (solo con `StoredFile`), `UncitedSource` (Info, non degrada il verdetto); attestazione positiva (conteggi); tab **"Verifica"** read-only; verdetto `warnings==0` → "Catena coerente". **PR #32 mergiata** (commit `159f954`). **Issue #9 CHIUSA.** Review Codex leggera: giro 1 `changes-requested` (SHOULD FIX perf) → fix O(1) a comportamento invariato → verde.
 - **#10** **Privacy Guard** (cintura trasversale, posata **prima** di aprire le porte rischiose): `quaero-core::privacy` puro — `PrivacyPolicy::evaluate(&EgressRequest) -> Decision` reale/deterministico con **default-deny** (`ClientConfidential`/`UserContent` → destinazioni non locali = `Denied`; `NonSensitive`→remoto = `Allowed`; locali sempre `Allowed`); riga privacy read-only nello `StatusStrip`. **Nessun egress reale introdotto.** **PR #34 mergiata** (commit `9a8d178`). **Issue #10 CHIUSA.** Review Codex leggera: `approve`.
-- Test su `main`: **119 Rust** (72 unit core + 8 integration + 39 desktop) + **46 frontend**; CI verde.
+- Test su `main`: **144 Rust** (80 unit core + 8 integration + 56 desktop) + **48 frontend**; CI verde.
 - **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`. **Novità: smoke test umano obbligatorio prima del merge** per le feature visibili/rischiose/runtime (vedi `CONTRIBUTING.md` → "Smoke test umano prima del merge").
 - Mockup estetico di riferimento: `UX/index.html`.
 
@@ -168,6 +168,27 @@ Slice di **rinforzo**: primo provider che fa **I/O di rete reale**, dietro l'ide
 
 *(Consolidato dopo 4 giri di review avversariale Codex sul confine privacy/local-only: giro 1 BLOCKER env-URL off-device → fix endpoint fail-closed; giro 2 critico redirect → fix `Policy::none()`; giro 3 critico proxy ambientale → fix `.no_proxy()`; giro 4 `approve-with-notes`, nessun blocker né should-fix.)*
 
+## Manual Evidence Capture (#8B, consolidato)
+
+Follow-up di #8: creare un **Estratto da UI** collegato a una Fonte Documento, **persistente** dopo riavvio, con pin `sourceSha256` **byte-verificato**. **PR #40 mergiata** (commit `9fd5056`). Smoke test umano **PASS**.
+
+- **core** (`domain.rs`, puro/clock-free): `Excerpt` guadagna due campi **additivi** `note` (opzionale) + `createdAt` (`serde(default)` + `skip_serializing_if` → Workspace pre-#8B caricabili byte-identici); `new` invariato + nuovo `new_with_meta`; il timestamp è prodotto dal **layer desktop** (il core non legge orologi). `Workspace::with_excerpt` aggiunge e **rivalida l'intero grafo** (dangling/duplicate/sha-pin).
+- **desktop** (`store.rs` + IPC): `store::add_excerpt` con **lock per-matter** + `update` atomico; **id Estratto generato server-side** (rigenerato su collisione); `createdAt` RFC3339 **std-only** (no `chrono`). Comando IPC `add_excerpt` registrato; **nessuna nuova capability**.
+- **frontend**: `NewExcerptDialog` nella tab Estratti (dropdown Fonte Documento, quote, ancora kind+value, nota) → `add_excerpt` → `setOpen(view)` aggiorna la lista (mostra nota + timestamp); i18n IT/EN.
+
+**Confine Evidence/filesystem — indurito in 7 giri Codex (finale `approve`):**
+1. pin Evidence **byte-verificato** (ri-hash reale del blob sotto lock, fail-closed su tamper/missing) — *era tautologico*;
+2. `storedName` validato in `load_consistent` (oltre che in `add_excerpt`);
+3. `storedName` → **allowlist** `[A-Za-z0-9._-]` + device DOS riservati (chiude `:`, `$`, apici, separatori, NUL, spazi in un colpo);
+4. lettura **solo di un file regolare in-store** (no-follow `symlink_metadata`: symlink/reparse/dir/device rifiutati);
+5. **cap di lettura** `MAX_IMPORT_BYTES` (in `load_consistent` su `byteLen` e in `add_excerpt` su `meta.len()`) → no DoS memoria.
+
+**Residui CAN WAIT (non-blocker):** TOCTOU `symlink_metadata`→`read` (mitigato dal digest post-lettura, modello mono-processo + lock per-matter); **ri-hash generale dei blob su open/search** (rinviato per scelta).
+
+**Fuori da #8B** (slice future): **Citazioni da UI**, **highlight/clic→evidenzia**, **parsing reale** (PDF/DOCX), **viewer documenti**, **export**.
+
+*(Consolidato dopo 7 giri di review avversariale Codex sul confine Evidence/filesystem: pin tautologico → byte-verificato; traversal/assoluto; allowlist + device riservati; symlink/reparse/device; cap di lettura. Verdetto finale `approve`. Smoke test umano PASS; `Cargo.lock` invariato; nessuna nuova dipendenza/capability.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -187,7 +208,7 @@ Slice di **rinforzo**: primo provider che fa **I/O di rete reale**, dietro l'ide
 ## Issue aperte (GitHub)
 
 - **#1** — PRD (fondazione) + addendum architetturale.
-- Slice di lavoro **#2 → #15** (figlie del PRD) + slice di **rinforzo** fuori sequenza (es. **#37** provider locale Ollama). Tipo: AFK = un agente può prenderla; HITL = serve una decisione umana.
+- Slice di lavoro **#2 → #15** (figlie del PRD) + follow-up (**#8B** Manual Evidence Capture) + slice di **rinforzo** fuori sequenza (es. **#37** provider locale Ollama). Tipo: AFK = un agente può prenderla; HITL = serve una decisione umana.
 
 | Issue | Slice | Tipo | Bloccata da |
 |------|-------|------|-------------|
@@ -197,7 +218,8 @@ Slice di **rinforzo**: primo provider che fa **I/O di rete reale**, dietro l'ide
 | #5  | ✅ **CHIUSA** — Pratiche (Cliente→Pratica→Fascicolo): #5A dominio + #5B persistenza + #5C UI wiring (create/open/search). Unificazione mock↔reale = refinement UI futuro | AFK | #2, #3 |
 | #6  | ✅ **CHIUSA** — Allega & ingerisci documento + Evidence (import→Fonte Documento + `sha256`; byte fuori JSON; pubblicazione esclusiva). Chunked import = slice futura | AFK | #5 |
 | #7  | ✅ **CHIUSA** — Chat che risponde (senza citazioni): pipeline UI→IPC→Rust→ChatProvider→StubProvider offline; isolamento per-Pratica. Provider reale = slice futura | AFK | #6 |
-| #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione UI + clic→evidenzia = #8B futura | AFK | #7 |
+| #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione Estratti da UI = **#8B (fatta)**; clic→evidenzia/parsing = future | AFK | #7 |
+| #8B | ✅ **FATTA** — *(follow-up #8)* Manual Evidence Capture: creazione Estratti da UI collegati a Fonte Documento, persistenti, pin `sourceSha256` **byte-verificato** (no-follow regular file + allowlist `storedName` + cap lettura), note/createdAt additivi. Citazioni-UI/highlight/parsing = future | AFK | #8 |
 | #9  | ✅ **CHIUSA** — Verificatore citazioni: `verify(&Workspace)` puro + report derivato in `WorkspaceView` + tab "Verifica" read-only; `UncitedSource` Info non degrada il verdetto. Re-hash fisico = slice futura | AFK | #8 |
 | #10 | ✅ **CHIUSA** — Privacy guard: contratto `quaero-core::privacy` + `PrivacyPolicy::evaluate` default-deny + riga `StatusStrip`. Enforcement su egress reale = slice future | AFK | #8 |
 | #37 | ✅ **CHIUSA** — *(rinforzo)* Provider locale Ollama dietro `ChatProvider`, local-only fail-closed (endpoint loopback + no-redirect + no-proxy), opt-in via env, default stub, Privacy Guard nel path. **Primo egress reale.** Provider remoto/cloud = slice future | AFK | #7, #10 |
@@ -216,11 +238,11 @@ Slice di **rinforzo**: primo provider che fa **I/O di rete reale**, dietro l'ide
 
 ## Prossima sessione
 
-**#2, #3, l'intera #5, #6, #7, #8, #9, #10 e #37 completate e mergiate; issue #5, #6, #7, #8, #9, #10 e #37 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata**, **Privacy Guard** (cintura privacy) e **provider locale Ollama** (primo egress reale, local-only fail-closed) in casa. Prossimo step da decidere insieme.
+**#2, #3, l'intera #5, #6, #7, #8, #8B, #9, #10 e #37 completate e mergiate.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata** + **creazione Estratti da UI** (#8B), **Privacy Guard** (cintura privacy) e **provider locale Ollama** (primo egress reale, local-only fail-closed) in casa. Prossimo step da decidere insieme.
 
-**Da fare prima di qualunque nuova slice:** **smoke test umano del provider locale Ollama (#37)** — la regola è stata formalizzata dopo il merge, quindi la verifica manuale del comportamento reale (avvio Ollama locale + opt-in env + risposta nel path Privacy Guard) va eseguita ora, prima di aprire altro.
+**Smoke test umani già eseguiti (PASS):** **#37** provider locale Ollama (posture onesta, risposta reale, blocco endpoint non locale) e **#8B** Manual Evidence Capture (creazione Estratto → persistenza dopo riavvio → quote vuota rifiutata).
 
-Candidati naturali: **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#12** (Valuta clausola + proposta + export DOCX); provider **remoto**/cloud dietro `ChatProvider` (+ Privacy Guard, secondo egress reale); oppure slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **hardening loopback-numerico** del provider Ollama, **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
+Candidati naturali: **#12** (Valuta clausola + proposta + export DOCX); provider **remoto**/cloud dietro `ChatProvider` (+ Privacy Guard, secondo egress reale); **Citazioni da UI** e **clic→evidenzia/parsing reale** (prosecuzione di #8/#8B); oppure slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico/periodico** dei blob (verifica integrità su disco oltre #8B), **hardening loopback-numerico** del provider Ollama, **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
 
 Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**; per le **feature visibili/rischiose/runtime** (provider reale, OSINT, export DOCX/PDF, import/parsing, UI importante, privacy/security runtime, byte/FS, dati cliente, connettori) → **smoke test umano prima del merge** (vedi `CONTRIBUTING.md`).
 
