@@ -25,9 +25,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use quaero_core::domain::{
-    Client, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace, WorkspaceView,
+    Anchor, Client, Excerpt, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace,
+    WorkspaceView,
 };
 use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
@@ -441,6 +443,161 @@ fn import_document_with(
         .with_source(source)
         .map_err(|e| StoreError::Domain(e.to_string()))?;
     update(workspaces_dir, &updated)?;
+    Ok(updated.view())
+}
+
+/// Per-process counter feeding generated, filesystem-safe excerpt ids.
+static EXCERPT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a safe excerpt id. Never derived from user input (no separators /
+/// traversal). Collisions with an existing excerpt are handled by the caller.
+fn new_excerpt_id() -> String {
+    let n = EXCERPT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("exc-{}-{}", std::process::id(), n)
+}
+
+/// Current UTC time as RFC3339 (`YYYY-MM-DDTHH:MM:SSZ`), std-only (no `chrono`
+/// dependency). Generated in the desktop layer so the pure core stays
+/// clock-free.
+fn now_rfc3339() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    rfc3339_from_unix(secs)
+}
+
+/// Format a Unix timestamp (seconds, UTC) as RFC3339. Pure → unit-testable.
+fn rfc3339_from_unix(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (year, month,
+/// day). Valid for the full proleptic Gregorian range; std-only.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Add a manually-captured [`Excerpt`] to an existing Pratica (#8B).
+///
+/// Contract:
+/// - read-modify-write is serialised **per matter** (no last-write-wins loss);
+/// - the excerpt id is **generated server-side** (path-safe, never from input)
+///   and regenerated on the rare collision with an existing excerpt id;
+/// - `created_at` (RFC3339 UTC) is stamped **here** — the core stays clock-free;
+/// - if the referenced Fonte carries a [`StoredFile`], the excerpt is
+///   **auto-pinned** to its `sha256` (Evidence integrity); a fileless Fonte gets
+///   no pin;
+/// - persisted via the atomic [`update`] (unique temp + rename);
+/// - empty quote/anchor and referential integrity are enforced by the core.
+#[allow(clippy::too_many_arguments)]
+pub fn add_excerpt(
+    base: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+) -> Result<WorkspaceView, StoreError> {
+    add_excerpt_with(
+        base,
+        matter_id,
+        source_id,
+        anchor_kind,
+        anchor_value,
+        quote,
+        note,
+        &mut new_excerpt_id,
+        &now_rfc3339,
+    )
+}
+
+/// Core of [`add_excerpt`] with injectable id generator and clock (for tests
+/// that force an id collision or assert a deterministic timestamp).
+#[allow(clippy::too_many_arguments)]
+fn add_excerpt_with(
+    base: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+    gen_id: &mut dyn FnMut() -> String,
+    now: &dyn Fn() -> String,
+) -> Result<WorkspaceView, StoreError> {
+    // Validate the matter id before touching disk.
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    // Serialise read-modify-write per matter.
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    // The referenced Fonte must exist; if it carries a file, pin the excerpt to
+    // its digest (Evidence). A missing source yields no pin and the canonical
+    // validation below rejects it as a dangling excerpt.
+    let source = workspace.sources().iter().find(|s| s.id.0 == source_id);
+    let pin = source.and_then(|s| s.file.as_ref().map(|f| f.sha256.clone()));
+
+    // Allocate an excerpt id not already used by this workspace.
+    let taken: HashSet<String> = workspace
+        .excerpts()
+        .iter()
+        .map(|e| e.id().0.clone())
+        .collect();
+    let mut attempts = 0u32;
+    let excerpt_id = loop {
+        attempts += 1;
+        if attempts > 1000 {
+            return Err(StoreError::Io(
+                "could not allocate a unique excerpt id".to_string(),
+            ));
+        }
+        let candidate = gen_id();
+        if safe_file_stem(&candidate).is_err() || taken.contains(&candidate) {
+            continue;
+        }
+        break candidate;
+    };
+
+    let excerpt = Excerpt::new_with_meta(
+        excerpt_id,
+        SourceId::new(source_id),
+        Anchor {
+            kind: anchor_kind.to_string(),
+            value: anchor_value.to_string(),
+        },
+        quote,
+        pin,
+        note.map(|n| n.to_string()),
+        Some(now()),
+    )
+    .map_err(|e| StoreError::Domain(e.to_string()))?;
+
+    let updated = workspace
+        .with_excerpt(excerpt)
+        .map_err(|e| StoreError::Domain(e.to_string()))?;
+    update(base, &updated)?;
     Ok(updated.view())
 }
 
@@ -1047,5 +1204,104 @@ mod tests {
             .filter(|s| s.file.is_some())
             .count();
         assert_eq!(n, 1);
+    }
+
+    // ----- #8B: manual Excerpt capture -----
+
+    #[test]
+    fn rfc3339_formats_known_epochs() {
+        assert_eq!(rfc3339_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_from_unix(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn add_excerpt_persists_with_autopin_note_and_timestamp() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf")
+            .unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let sha = view.sources[0].file.as_ref().unwrap().sha256.clone();
+
+        let after = add_excerpt(
+            ws.path(),
+            "m",
+            &sid,
+            "clausola",
+            "7.2",
+            "il conduttore...",
+            Some("rilevante"),
+        )
+        .unwrap();
+        assert_eq!(after.excerpts.len(), 1);
+
+        // Reload from disk → persistence after close/reopen.
+        let reopened = open(ws.path(), "m").unwrap();
+        assert_eq!(reopened.excerpts.len(), 1);
+        let ex = &reopened.excerpts[0];
+        assert_eq!(ex.quote(), "il conduttore...");
+        assert_eq!(ex.source_id().0, sid);
+        assert_eq!(ex.anchor().kind, "clausola");
+        assert_eq!(ex.anchor().value, "7.2");
+        assert_eq!(ex.note(), Some("rilevante"));
+        assert_eq!(ex.source_sha256(), Some(sha.as_str())); // auto-pinned
+        assert!(ex.created_at().is_some());
+    }
+
+    #[test]
+    fn add_excerpt_to_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        let r = add_excerpt(ws.path(), "nope", "s1", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn add_excerpt_to_unknown_source_is_rejected() {
+        let ws = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let r = add_excerpt(ws.path(), "m", "ghost", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+    }
+
+    #[test]
+    fn add_excerpt_empty_quote_is_rejected_and_not_persisted() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"x").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let r = add_excerpt(ws.path(), "m", &sid, "k", "v", "   ", None);
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_regenerates_on_id_collision() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"x").unwrap();
+        let sid = view.sources[0].id.0.clone();
+
+        // gen yields: exc-1 (1st add), exc-1 again (collision on 2nd add), exc-2.
+        let mut seq = vec![
+            "exc-1".to_string(),
+            "exc-1".to_string(),
+            "exc-2".to_string(),
+        ]
+        .into_iter();
+        let mut gen = move || seq.next().unwrap();
+        let now = || "2026-06-01T10:00:00Z".to_string();
+
+        add_excerpt_with(ws.path(), "m", &sid, "k", "v", "q1", None, &mut gen, &now).unwrap();
+        let after =
+            add_excerpt_with(ws.path(), "m", &sid, "k", "v", "q2", None, &mut gen, &now).unwrap();
+
+        let ids: Vec<String> = after.excerpts.iter().map(|e| e.id().0.clone()).collect();
+        assert_eq!(after.excerpts.len(), 2);
+        assert!(ids.contains(&"exc-1".to_string()));
+        assert!(ids.contains(&"exc-2".to_string()));
+        assert_eq!(after.excerpts[0].created_at(), Some("2026-06-01T10:00:00Z"));
     }
 }

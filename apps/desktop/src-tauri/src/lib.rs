@@ -13,6 +13,7 @@ pub fn run() {
             commands::workspace::open_workspace,
             commands::workspace::search_workspaces,
             commands::workspace::import_document,
+            commands::workspace::add_excerpt,
             commands::chat::chat_send,
             commands::chat::chat_provider_kind,
         ])

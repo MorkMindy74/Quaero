@@ -61,3 +61,30 @@ pub fn import_document(
     store::import_document(&ws_dir, &blob_dir, &matter_id, &original_name, &bytes)
         .map_err(|e| e.to_string())
 }
+
+/// IPC: create a manual Estratto (#8B) linked to a Fonte of an existing Pratica.
+/// The excerpt id and `createdAt` timestamp are generated server-side; if the
+/// Fonte has a stored file the excerpt is auto-pinned to its sha256. No extra
+/// capability, no filesystem dialog: only the canonical JSON is updated.
+#[tauri::command]
+pub fn add_excerpt(
+    app: AppHandle,
+    matter_id: String,
+    source_id: String,
+    anchor_kind: String,
+    anchor_value: String,
+    quote: String,
+    note: Option<String>,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::add_excerpt(
+        &ws_dir,
+        &matter_id,
+        &source_id,
+        &anchor_kind,
+        &anchor_value,
+        &quote,
+        note.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
