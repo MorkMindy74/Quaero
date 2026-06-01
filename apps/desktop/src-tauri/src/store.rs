@@ -655,16 +655,41 @@ fn add_excerpt_with(
                     });
                 }
                 let blob = files_dir.join(&matter_stem).join(&file.stored_name);
+
+                // No-follow metadata on the final path: the evidence blob must be
+                // a REGULAR file (reject symlinks/reparse points, directories,
+                // devices/special files) — never read THROUGH a symlink.
+                let meta =
+                    fs::symlink_metadata(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file missing or unreadable".to_string(),
+                    })?;
+                if !meta.file_type().is_file() {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file is not a regular file (symlink/device/dir rejected)"
+                            .to_string(),
+                    });
+                }
+                // Check the on-disk length against the recorded byteLen BEFORE
+                // reading any bytes: bounds the read and catches tampering early.
+                if meta.len() != file.byte_len {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file length does not match the recorded byteLen"
+                            .to_string(),
+                    });
+                }
+                // Only now read the bytes and verify the digest.
                 let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
                     source: source_id.to_string(),
                     reason: "stored file missing or unreadable".to_string(),
                 })?;
                 let digest = sha256_hex(&bytes);
-                if bytes.len() as u64 != file.byte_len || digest != file.sha256 {
+                if digest != file.sha256 {
                     return Err(StoreError::EvidenceIntegrity {
                         source: source_id.to_string(),
-                        reason: "stored file bytes do not match the recorded digest/length"
-                            .to_string(),
+                        reason: "stored file bytes do not match the recorded digest".to_string(),
                     });
                 }
                 Some(digest)
@@ -1489,6 +1514,71 @@ mod tests {
         // Delete the blob; the recorded metadata is now dangling.
         fs::remove_file(files.path().join("m").join(&stored_name)).unwrap();
 
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_blob_replaced_by_directory() {
+        // A non-regular file (here a directory at the blob path) must be rejected
+        // before any read — covers symlink/reparse/device/dir uniformly.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"bytes").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        let blob = files.path().join("m").join(&stored_name);
+        fs::remove_file(&blob).unwrap();
+        fs::create_dir(&blob).unwrap(); // same name, but a directory now
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_same_length_tamper_via_digest() {
+        // Bytes changed but length preserved → caught by the post-read sha check.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Overwrite with the SAME length (9 bytes) but different content.
+        let blob = files.path().join("m").join(&stored_name);
+        assert_eq!(b"hello pdf".len(), b"HELLO pdf".len());
+        fs::write(&blob, b"HELLO pdf").unwrap();
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_excerpt_rejects_symlink_blob() {
+        use std::os::unix::fs::symlink;
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Replace the blob with a symlink to an outside file (same content/len).
+        let target = outside.path().join("secret");
+        fs::write(&target, b"hello pdf").unwrap();
+        let blob = files.path().join("m").join(&stored_name);
+        fs::remove_file(&blob).unwrap();
+        symlink(&target, &blob).unwrap();
+
+        // Even though the target content matches, a symlink is not a regular file.
         let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
         assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
         assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
