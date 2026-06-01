@@ -39,6 +39,7 @@
   "pilot.status.counts": "Fonti: {{sources}} · Estratti: {{excerpts}} · Citazioni: {{citations}}",
   "pilot.status.verify": "Verifica: {{verdict}}",
   "pilot.status.next": "Prossima azione:",
+  "pilot.status.nextBadge": "Prossima azione",
   "pilot.next.importSource": "Importa prima un documento.",
   "pilot.next.createExcerpt": "Crea il primo Estratto da una Fonte.",
   "pilot.next.addCitation": "Aggiungi una Citazione per trasformare un Estratto in un'affermazione.",

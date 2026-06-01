@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { TabButton, Button } from "../ui";
+import { TabButton, Button, Badge } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
@@ -460,9 +460,17 @@ function PraticaStatus({ workspace }: { workspace: WorkspaceView }) {
       </div>
       <div className="text-muted">{t("pilot.status.counts", { sources, excerpts, citations })}</div>
       <div className="text-muted">{t("pilot.status.verify", { verdict })}</div>
-      <div className="mt-1">
-        <span className="text-muted">{t("pilot.status.next")} </span>
-        <span className="text-ink">{action}</span>
+      {/* Next action as a calm, professional callout (no popup/animation): a
+          bordered box with a left accent + "Prossima azione" badge + the action
+          text in a clearer hierarchy. Content stays driven by nextActionKey. */}
+      <div
+        data-testid="next-action"
+        role="note"
+        aria-label={t("pilot.status.nextBadge")}
+        className="mt-2 rounded border border-hairline border-l-2 border-l-accent-source bg-panel-2 px-2 py-1.5"
+      >
+        <Badge tone="source">{t("pilot.status.nextBadge")}</Badge>
+        <div className="mt-1 text-sm font-medium text-ink">{action}</div>
       </div>
     </div>
   );

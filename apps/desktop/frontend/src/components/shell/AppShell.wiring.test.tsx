@@ -597,6 +597,10 @@ test("pilot UX: Stato Pratica shows counts, verdict and the next step (export st
   expect(status).toHaveTextContent("Fonti: 1 · Estratti: 1 · Citazioni: 1");
   expect(status).toHaveTextContent("Verifica: Catena coerente");
   expect(status).toHaveTextContent("Puoi esportare il report Markdown grounded.");
+  // the next action is a labelled callout (badge + action text)
+  const callout = within(status).getByTestId("next-action");
+  expect(callout).toHaveTextContent("Prossima azione");
+  expect(callout).toHaveTextContent("Puoi esportare il report Markdown grounded.");
 });
 
 test("pilot UX: next step guides to create the first Estratto when there are sources but none", async () => {

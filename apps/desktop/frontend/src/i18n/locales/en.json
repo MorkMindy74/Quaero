@@ -39,6 +39,7 @@
   "pilot.status.counts": "Sources: {{sources}} · Excerpts: {{excerpts}} · Citations: {{citations}}",
   "pilot.status.verify": "Verification: {{verdict}}",
   "pilot.status.next": "Next step:",
+  "pilot.status.nextBadge": "Next step",
   "pilot.next.importSource": "Import a document first.",
   "pilot.next.createExcerpt": "Create the first Excerpt from a source.",
   "pilot.next.addCitation": "Add a Citation to turn an Excerpt into a claim.",
