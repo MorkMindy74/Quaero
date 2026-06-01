@@ -4,21 +4,23 @@ import { Button } from "../ui";
 import type { Excerpt } from "../../domain/types";
 
 interface NewCitationDialogProps {
-  /** The Estratto being cited (preselected — the user only writes the claim). */
+  /** The Estratto being cited (preselected, read-only; fixed also in edit). */
   excerpt: Excerpt;
+  /** EDIT mode: prefilled claim. When present the dialog edits an existing
+   *  Citazione (the linked Estratto stays fixed). */
+  initialClaim?: string;
   onClose: () => void;
   /** Returns true on success (dialog closes), false on error (stays open). */
-  onCreate: (claim: string) => Promise<boolean>;
-  /** Backend error to surface inline. */
+  onSubmit: (claim: string) => Promise<boolean>;
   error: string | null;
 }
 
-// Citations-from-UI: the user is looking at an Excerpt and cites it. The
-// excerptId is implicit (preselected); only the claim (Affermazione) is typed.
-// A Citation references an excerpt, never a Fonte (ADR-0007).
-export function NewCitationDialog({ excerpt, onClose, onCreate, error }: NewCitationDialogProps) {
+// Citations-from-UI create + edit. The excerptId is implicit (the Estratto is
+// fixed, also when editing); only the claim (Affermazione) is editable.
+export function NewCitationDialog({ excerpt, initialClaim, onClose, onSubmit, error }: NewCitationDialogProps) {
   const { t } = useTranslation();
-  const [claim, setClaim] = useState("");
+  const editing = initialClaim !== undefined;
+  const [claim, setClaim] = useState(initialClaim ?? "");
   const [busy, setBusy] = useState(false);
 
   const canSubmit = claim.trim() !== "" && !busy;
@@ -26,17 +28,18 @@ export function NewCitationDialog({ excerpt, onClose, onCreate, error }: NewCita
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
-    const ok = await onCreate(claim.trim());
+    const ok = await onSubmit(claim.trim());
     setBusy(false);
     if (ok) onClose();
   };
 
   const field = "w-full rounded border border-hairline bg-panel-2 px-2 py-1 text-sm outline-none";
+  const title = editing ? t("citations.editTitle") : t("citations.newTitle");
 
   return (
     <div
       role="dialog"
-      aria-label={t("citations.newTitle")}
+      aria-label={title}
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 pt-24"
       onClick={onClose}
     >
@@ -48,9 +51,8 @@ export function NewCitationDialog({ excerpt, onClose, onCreate, error }: NewCita
           void submit();
         }}
       >
-        <h2 className="mb-3 font-serif text-base font-semibold">{t("citations.newTitle")}</h2>
+        <h2 className="mb-3 font-serif text-base font-semibold">{title}</h2>
 
-        {/* The cited Excerpt, read-only, so the link is unambiguous. */}
         <div className="mb-3">
           <div className="mb-1 text-muted">{t("citations.citing")}</div>
           <blockquote className="border-l-2 border-hairline pl-2 text-sm text-muted">

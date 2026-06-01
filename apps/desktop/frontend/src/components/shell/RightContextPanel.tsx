@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TabButton, Button } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
-import { NewExcerptDialog } from "./NewExcerptDialog";
+import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
 import {
   workspaceView,
@@ -108,39 +108,44 @@ function ExcerptsTab({
   addCitationError,
   onExportMarkdown,
   exportError,
+  onUpdateExcerpt,
+  onDeleteExcerpt,
+  onUpdateCitation,
+  onDeleteCitation,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
   sources: SourceRef[];
-  onAddExcerpt?: (args: {
-    sourceId: string;
-    anchorKind: string;
-    anchorValue: string;
-    quote: string;
-    note?: string;
-  }) => Promise<boolean>;
+  onAddExcerpt?: (args: ExcerptDialogValues) => Promise<boolean>;
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
   onExportMarkdown?: () => Promise<boolean>;
   exportError?: string | null;
+  onUpdateExcerpt?: (excerptId: string, args: ExcerptDialogValues) => Promise<boolean>;
+  onDeleteExcerpt?: (excerptId: string) => Promise<boolean>;
+  onUpdateCitation?: (citationId: string, claim: string) => Promise<boolean>;
+  onDeleteCitation?: (citationId: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [citing, setCiting] = useState<Excerpt | null>(null);
+  const [editingExcerpt, setEditingExcerpt] = useState<Excerpt | null>(null);
+  const [editingCitation, setEditingCitation] = useState<{ citation: Citation; excerpt: Excerpt } | null>(null);
+  // Two-step delete confirm: which item id is awaiting "Confermi?".
+  const [confirm, setConfirm] = useState<{ kind: "excerpt" | "citation"; id: string } | null>(null);
+  const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [exportState, setExportState] = useState<"idle" | "busy" | "done">("idle");
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
   const documentSources = sources.filter((s) => s.kind === "Documento");
 
-  // Clear any pending auto-hide timer on unmount.
   useEffect(() => () => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
   }, []);
 
   const handleExport = async () => {
     if (!onExportMarkdown) return;
-    // A new export resets the previous "Markdown esportato." message immediately.
     if (hideTimer.current) {
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
@@ -148,12 +153,49 @@ function ExcerptsTab({
     setExportState("busy");
     const ok = await onExportMarkdown();
     setExportState(ok ? "done" : "idle");
-    // The success message is transient → auto-hide so it never refers ambiguously
-    // to an older export.
     if (ok) {
       hideTimer.current = setTimeout(() => setExportState("idle"), 4000);
     }
   };
+
+  const linkBtn = "text-[11px] text-muted underline-offset-2 hover:underline";
+
+  const confirmDelete = async (kind: "excerpt" | "citation", id: string) => {
+    setConfirm(null);
+    setDeleteBlocked(null);
+    if (kind === "citation") {
+      if (onDeleteCitation) await onDeleteCitation(id);
+    } else if (onDeleteExcerpt) {
+      const ok = await onDeleteExcerpt(id);
+      // The only delete refusal is "still cited" → surface a clear message.
+      if (!ok) setDeleteBlocked(t("excerpts.deleteCitedBlocked"));
+    }
+  };
+
+  // A small "Elimina → Confermi? Sì/Annulla" inline control.
+  const deleteControl = (kind: "excerpt" | "citation", id: string) =>
+    confirm && confirm.kind === kind && confirm.id === id ? (
+      <span className="text-[11px]">
+        {t("evidence.confirmDelete")}{" "}
+        <button type="button" className={linkBtn} onClick={() => void confirmDelete(kind, id)}>
+          {t("evidence.yes")}
+        </button>{" "}
+        <button type="button" className={linkBtn} onClick={() => setConfirm(null)}>
+          {t("evidence.cancel")}
+        </button>
+      </span>
+    ) : (
+      <button
+        type="button"
+        className={linkBtn}
+        onClick={() => {
+          setDeleteBlocked(null);
+          setConfirm({ kind, id });
+        }}
+      >
+        {t("evidence.delete")}
+      </button>
+    );
 
   return (
     <div className="space-y-3">
@@ -171,9 +213,7 @@ function ExcerptsTab({
           )}
         </div>
       )}
-      {onExportMarkdown && (
-        <p className="text-[11px] text-muted">{t("export.hint")}</p>
-      )}
+      {onExportMarkdown && <p className="text-[11px] text-muted">{t("export.hint")}</p>}
       {exportState === "done" && (
         <p role="status" className="text-xs text-accent-verified">
           {t("export.done")}
@@ -182,6 +222,11 @@ function ExcerptsTab({
       {exportError && (
         <p role="alert" className="text-xs text-accent-warning">
           {exportError}
+        </p>
+      )}
+      {deleteBlocked && (
+        <p role="alert" className="text-xs text-accent-warning">
+          {deleteBlocked}
         </p>
       )}
 
@@ -201,19 +246,33 @@ function ExcerptsTab({
             {citations
               .filter((c) => c.excerptId === ex.id)
               .map((c) => (
-                <div key={c.id} className="mt-1 text-xs text-muted">
-                  ↳ {c.claim}
+                <div key={c.id} className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span>↳ {c.claim}</span>
+                  {onUpdateCitation && (
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={() => setEditingCitation({ citation: c, excerpt: ex })}
+                    >
+                      {t("evidence.edit")}
+                    </button>
+                  )}
+                  {onDeleteCitation && deleteControl("citation", c.id)}
                 </div>
               ))}
-            {onAddCitation && (
-              <button
-                type="button"
-                onClick={() => setCiting(ex)}
-                className="mt-1 text-[11px] text-muted underline-offset-2 hover:underline"
-              >
-                {t("citations.cite")}
-              </button>
-            )}
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              {onAddCitation && (
+                <button type="button" onClick={() => setCiting(ex)} className={linkBtn}>
+                  {t("citations.cite")}
+                </button>
+              )}
+              {onUpdateExcerpt && (
+                <button type="button" onClick={() => setEditingExcerpt(ex)} className={linkBtn}>
+                  {t("evidence.edit")}
+                </button>
+              )}
+              {onDeleteExcerpt && deleteControl("excerpt", ex.id)}
+            </div>
           </div>
         ))
       )}
@@ -223,7 +282,24 @@ function ExcerptsTab({
           sources={documentSources}
           error={addExcerptError ?? null}
           onClose={() => setDialogOpen(false)}
-          onCreate={onAddExcerpt}
+          onSubmit={onAddExcerpt}
+        />
+      )}
+
+      {editingExcerpt && onUpdateExcerpt && (
+        <NewExcerptDialog
+          sources={documentSources}
+          initial={{
+            sourceId: editingExcerpt.sourceId,
+            sourceTitle: sourceTitle(editingExcerpt.sourceId),
+            anchorKind: editingExcerpt.anchor.kind,
+            anchorValue: editingExcerpt.anchor.value,
+            quote: editingExcerpt.quote,
+            note: editingExcerpt.note,
+          }}
+          error={addExcerptError ?? null}
+          onClose={() => setEditingExcerpt(null)}
+          onSubmit={(args) => onUpdateExcerpt(editingExcerpt.id, args)}
         />
       )}
 
@@ -232,7 +308,17 @@ function ExcerptsTab({
           excerpt={citing}
           error={addCitationError ?? null}
           onClose={() => setCiting(null)}
-          onCreate={(claim) => onAddCitation(citing.id, claim)}
+          onSubmit={(claim) => onAddCitation(citing.id, claim)}
+        />
+      )}
+
+      {editingCitation && onUpdateCitation && (
+        <NewCitationDialog
+          excerpt={editingCitation.excerpt}
+          initialClaim={editingCitation.citation.claim}
+          error={addCitationError ?? null}
+          onClose={() => setEditingCitation(null)}
+          onSubmit={(claim) => onUpdateCitation(editingCitation.citation.id, claim)}
         />
       )}
     </div>
@@ -350,6 +436,10 @@ export function RightContextPanel({
   addCitationError,
   onExportMarkdown,
   exportError,
+  onUpdateExcerpt,
+  onDeleteExcerpt,
+  onUpdateCitation,
+  onDeleteCitation,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -366,6 +456,10 @@ export function RightContextPanel({
   addCitationError?: string | null;
   onExportMarkdown?: () => Promise<boolean>;
   exportError?: string | null;
+  onUpdateExcerpt?: (excerptId: string, args: ExcerptDialogValues) => Promise<boolean>;
+  onDeleteExcerpt?: (excerptId: string) => Promise<boolean>;
+  onUpdateCitation?: (citationId: string, claim: string) => Promise<boolean>;
+  onDeleteCitation?: (citationId: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -435,6 +529,10 @@ export function RightContextPanel({
             addCitationError={addCitationError}
             onExportMarkdown={onExportMarkdown}
             exportError={exportError}
+            onUpdateExcerpt={onUpdateExcerpt}
+            onDeleteExcerpt={onDeleteExcerpt}
+            onUpdateCitation={onUpdateCitation}
+            onDeleteCitation={onDeleteCitation}
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}

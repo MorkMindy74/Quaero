@@ -454,6 +454,105 @@ test("#8B Save button is disabled with a hint until the anchor reference is fill
   expect(within(dialog).queryByText(/Per salvare:/)).not.toBeInTheDocument();
 });
 
+test("edit/delete: 'Modifica' on an excerpt edits it via update_excerpt", async () => {
+  let updated: { matterId: string; excerptId: string; quote: string } | null = null;
+  const base = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] }],
+    excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "vecchia" }],
+    citations: [],
+  };
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return base;
+    if (cmd === "update_excerpt") {
+      updated = args as typeof updated;
+      return { ...base, excerpts: [{ ...base.excerpts[0], quote: "nuova" }] };
+    }
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "Modifica" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "Modifica Estratto" });
+  const quote = within(dialog).getByLabelText("Testo dell'Estratto");
+  expect(quote).toHaveValue("vecchia"); // prefilled
+  fireEvent.change(quote, { target: { value: "nuova" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Salva Estratto" }));
+
+  await waitFor(() => expect(updated).not.toBeNull());
+  expect(updated!.matterId).toBe("m");
+  expect(updated!.excerptId).toBe("e1");
+  expect(updated!.quote).toBe("nuova");
+  await waitFor(() => expect(within(context).getByText(/nuova/)).toBeInTheDocument());
+});
+
+test("edit/delete: deleting a citation needs a two-step confirm", async () => {
+  let deleted: { citationId: string } | null = null;
+  const base = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [],
+    excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "q" }],
+    citations: [{ id: "c1", claim: "Affermazione.", excerptId: "e1" }],
+  };
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return base;
+    if (cmd === "delete_citation") {
+      deleted = args as typeof deleted;
+      return { ...base, citations: [] };
+    }
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  // the citation's "Elimina" is the first one (its row renders before the excerpt action row)
+  fireEvent.click((await within(context).findAllByRole("button", { name: "Elimina" }))[0]);
+  // a confirm step appears; nothing deleted yet
+  expect(deleted).toBeNull();
+  fireEvent.click(within(context).getByRole("button", { name: "Sì" }));
+
+  await waitFor(() => expect(deleted).not.toBeNull());
+  expect(deleted!.citationId).toBe("c1");
+});
+
+test("edit/delete: deleting a cited excerpt is blocked with a clear message", async () => {
+  const base = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [],
+    excerpts: [{ id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "q" }],
+    citations: [{ id: "c1", claim: "Affermazione.", excerptId: "e1" }],
+  };
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces") return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return base;
+    if (cmd === "delete_excerpt") throw new Error("excerpt e1 is cited by c1");
+  });
+  render(<AppShell />);
+  fireEvent.click(await within(screen.getByTestId("region-sidebar")).findByText("Rossi c. Bianchi"));
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  // the excerpt's "Elimina" is the last one (after the citation row)
+  const eliminaButtons = await within(context).findAllByRole("button", { name: "Elimina" });
+  fireEvent.click(eliminaButtons[eliminaButtons.length - 1]);
+  fireEvent.click(within(context).getByRole("button", { name: "Sì" }));
+
+  await waitFor(() =>
+    expect(
+      within(context).getByText("Estratto citato: elimina prima le Citazioni collegate."),
+    ).toBeInTheDocument(),
+  );
+});
+
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {
   mockIPC((cmd) => {
     if (cmd === "search_workspaces") return [];

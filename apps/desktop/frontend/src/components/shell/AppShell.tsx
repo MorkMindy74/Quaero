@@ -14,6 +14,10 @@ import {
   addExcerpt,
   addCitation,
   exportMarkdown,
+  updateExcerpt,
+  deleteExcerpt,
+  updateCitation,
+  deleteCitation,
 } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
@@ -94,6 +98,59 @@ export default function AppShell() {
     }
   };
 
+  const handleUpdateExcerpt = async (
+    excerptId: string,
+    args: { sourceId: string; anchorKind: string; anchorValue: string; quote: string; note?: string },
+  ): Promise<boolean> => {
+    if (!open) return false;
+    try {
+      setOpen(
+        await updateExcerpt({
+          matterId: open.matter.id,
+          excerptId,
+          anchorKind: args.anchorKind,
+          anchorValue: args.anchorValue,
+          quote: args.quote,
+          note: args.note,
+        }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleDeleteExcerpt = async (excerptId: string): Promise<boolean> => {
+    if (!open) return false;
+    try {
+      setOpen(await deleteExcerpt(open.matter.id, excerptId));
+      return true;
+    } catch {
+      // Refused (e.g. still cited) → the panel shows a clear block message.
+      return false;
+    }
+  };
+
+  const handleUpdateCitation = async (citationId: string, claim: string): Promise<boolean> => {
+    if (!open) return false;
+    try {
+      setOpen(await updateCitation(open.matter.id, citationId, claim));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleDeleteCitation = async (citationId: string): Promise<boolean> => {
+    if (!open) return false;
+    try {
+      setOpen(await deleteCitation(open.matter.id, citationId));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const handleExportMarkdown = async (): Promise<boolean> => {
     setExportError(null);
     if (!open) return false;
@@ -152,6 +209,10 @@ export default function AppShell() {
           addCitationError={addCitationError}
           onExportMarkdown={open ? handleExportMarkdown : undefined}
           exportError={exportError}
+          onUpdateExcerpt={open ? handleUpdateExcerpt : undefined}
+          onDeleteExcerpt={open ? handleDeleteExcerpt : undefined}
+          onUpdateCitation={open ? handleUpdateCitation : undefined}
+          onDeleteCitation={open ? handleDeleteCitation : undefined}
         />
       </div>
       <StatusStrip />

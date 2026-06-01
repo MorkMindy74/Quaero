@@ -99,6 +99,47 @@ export function exportMarkdown(matterId: string): Promise<string> {
   return invoke<string>("export_markdown", { matterId });
 }
 
+// --- edit/delete Estratti e Citazioni --------------------------------------
+
+/** Edit an existing Estratto (quote + anchor + note). The Fonte link, sha256
+ *  pin and createdAt are preserved by the backend. */
+export function updateExcerpt(args: {
+  matterId: string;
+  excerptId: string;
+  anchorKind: string;
+  anchorValue: string;
+  quote: string;
+  note?: string;
+}): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("update_excerpt", {
+    matterId: args.matterId,
+    excerptId: args.excerptId,
+    anchorKind: args.anchorKind,
+    anchorValue: args.anchorValue,
+    quote: args.quote,
+    note: args.note ?? null,
+  });
+}
+
+/** Delete an Estratto. Rejected by the backend if it is still cited. */
+export function deleteExcerpt(matterId: string, excerptId: string): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("delete_excerpt", { matterId, excerptId });
+}
+
+/** Edit a Citazione's claim (linked Estratto unchanged). */
+export function updateCitation(
+  matterId: string,
+  citationId: string,
+  claim: string,
+): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("update_citation", { matterId, citationId, claim });
+}
+
+/** Delete a Citazione (always safe). */
+export function deleteCitation(matterId: string, citationId: string): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("delete_citation", { matterId, citationId });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */
