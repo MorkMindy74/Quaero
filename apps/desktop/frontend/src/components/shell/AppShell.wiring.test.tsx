@@ -317,6 +317,57 @@ test("#8B the New Excerpt dialog warns when the Pratica has no Documento source"
   ).toBeInTheDocument();
 });
 
+test("citations-from-UI: '+ Cita' on an excerpt calls add_citation and shows the claim", async () => {
+  let added: { matterId: string; excerptId: string; claim: string } | null = null;
+  const baseView = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] }],
+    excerpts: [
+      { id: "e1", sourceId: "s1", anchor: { kind: "clausola", value: "7.2" }, quote: "Il Fornitore recede." },
+    ],
+    citations: [],
+  };
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return baseView;
+    if (cmd === "add_citation") {
+      added = args as typeof added;
+      return {
+        ...baseView,
+        citations: [{ id: "cit-1", claim: "Recesso con preavviso di 15 giorni.", excerptId: "e1" }],
+      };
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "+ Cita" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "Nuova Citazione" });
+  // the cited excerpt is shown read-only in the dialog
+  expect(within(dialog).getByText(/Il Fornitore recede/)).toBeInTheDocument();
+  fireEvent.change(within(dialog).getByLabelText("Affermazione (claim)"), {
+    target: { value: "Recesso con preavviso di 15 giorni." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Salva Citazione" }));
+
+  await waitFor(() => expect(added).not.toBeNull());
+  expect(added!.matterId).toBe("m");
+  expect(added!.excerptId).toBe("e1");
+  expect(added!.claim).toBe("Recesso con preavviso di 15 giorni.");
+  // the returned view refreshes the list → the citation shows under its excerpt
+  await waitFor(() =>
+    expect(within(context).getByText(/Recesso con preavviso di 15 giorni/)).toBeInTheDocument(),
+  );
+});
+
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {
   mockIPC((cmd) => {
     if (cmd === "search_workspaces") return [];

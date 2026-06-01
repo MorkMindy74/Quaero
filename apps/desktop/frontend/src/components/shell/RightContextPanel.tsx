@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { TabButton, Button } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import { NewExcerptDialog } from "./NewExcerptDialog";
+import { NewCitationDialog } from "./NewCitationDialog";
 import {
   workspaceView,
   reasoningSteps,
@@ -103,6 +104,8 @@ function ExcerptsTab({
   sources,
   onAddExcerpt,
   addExcerptError,
+  onAddCitation,
+  addCitationError,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
@@ -115,9 +118,12 @@ function ExcerptsTab({
     note?: string;
   }) => Promise<boolean>;
   addExcerptError?: string | null;
+  onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
+  addCitationError?: string | null;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [citing, setCiting] = useState<Excerpt | null>(null);
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
   const documentSources = sources.filter((s) => s.kind === "Documento");
 
@@ -151,6 +157,15 @@ function ExcerptsTab({
                   ↳ {c.claim}
                 </div>
               ))}
+            {onAddCitation && (
+              <button
+                type="button"
+                onClick={() => setCiting(ex)}
+                className="mt-1 text-[11px] text-muted underline-offset-2 hover:underline"
+              >
+                {t("citations.cite")}
+              </button>
+            )}
           </div>
         ))
       )}
@@ -161,6 +176,15 @@ function ExcerptsTab({
           error={addExcerptError ?? null}
           onClose={() => setDialogOpen(false)}
           onCreate={onAddExcerpt}
+        />
+      )}
+
+      {citing && onAddCitation && (
+        <NewCitationDialog
+          excerpt={citing}
+          error={addCitationError ?? null}
+          onClose={() => setCiting(null)}
+          onCreate={(claim) => onAddCitation(citing.id, claim)}
         />
       )}
     </div>
@@ -274,6 +298,8 @@ export function RightContextPanel({
   importError,
   onAddExcerpt,
   addExcerptError,
+  onAddCitation,
+  addCitationError,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -286,6 +312,8 @@ export function RightContextPanel({
     note?: string;
   }) => Promise<boolean>;
   addExcerptError?: string | null;
+  onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
+  addCitationError?: string | null;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -351,6 +379,8 @@ export function RightContextPanel({
             sources={workspace?.sources ?? []}
             onAddExcerpt={onAddExcerpt}
             addExcerptError={addExcerptError}
+            onAddCitation={onAddCitation}
+            addCitationError={addCitationError}
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}

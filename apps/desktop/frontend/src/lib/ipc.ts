@@ -77,6 +77,21 @@ export function addExcerpt(args: {
   });
 }
 
+/** Create a manual Citazione linking a `claim` to an existing Estratto. The
+ *  citation id is generated server-side; integrity (citation → excerpt) is
+ *  enforced by the core. Returns the updated view so the list refreshes. */
+export function addCitation(args: {
+  matterId: string;
+  excerptId: string;
+  claim: string;
+}): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("add_citation", {
+    matterId: args.matterId,
+    excerptId: args.excerptId,
+    claim: args.claim,
+  });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */
