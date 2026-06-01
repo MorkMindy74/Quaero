@@ -213,6 +213,110 @@ test("#9 the Verifica tab shows the verdict and findings of the open workspace",
   expect(within(context).getByText(/Estratto non citato/)).toBeInTheDocument();
 });
 
+test("#8B creating an Estratto from the UI calls add_excerpt and shows it", async () => {
+  let added: {
+    matterId: string;
+    sourceId: string;
+    anchorKind: string;
+    anchorValue: string;
+    quote: string;
+    note: string | null;
+  } | null = null;
+  const baseView = {
+    client: { id: "alfa", name: "Alfa S.r.l." },
+    matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+    sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+    dossiers: [{ id: "dyn-documento", name: "Documenti", kind: "Dynamic", sources: ["s1"] }],
+    excerpts: [],
+    citations: [],
+  };
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace") return baseView;
+    if (cmd === "add_excerpt") {
+      added = args as typeof added;
+      return {
+        ...baseView,
+        excerpts: [
+          {
+            id: "exc-1",
+            sourceId: "s1",
+            anchor: { kind: "clausola", value: "7.2" },
+            quote: "Il conduttore è tenuto.",
+            note: "rilevante",
+            createdAt: "2026-06-01T10:00:00Z",
+          },
+        ],
+      };
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "+ Nuovo Estratto" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "Nuovo Estratto" });
+  fireEvent.change(within(dialog).getByLabelText("Testo dell'Estratto"), {
+    target: { value: "Il conduttore è tenuto." },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Riferimento (es. 3, 7.2)"), {
+    target: { value: "7.2" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Tipo ancora (es. pagina, clausola)"), {
+    target: { value: "clausola" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Nota (opzionale)"), {
+    target: { value: "rilevante" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Salva Estratto" }));
+
+  await waitFor(() => expect(added).not.toBeNull());
+  expect(added!.matterId).toBe("m");
+  expect(added!.sourceId).toBe("s1");
+  expect(added!.anchorKind).toBe("clausola");
+  expect(added!.anchorValue).toBe("7.2");
+  expect(added!.quote).toBe("Il conduttore è tenuto.");
+  expect(added!.note).toBe("rilevante");
+  // the returned view refreshes the Estratti list
+  await waitFor(() =>
+    expect(within(context).getByText(/Il conduttore è tenuto/)).toBeInTheDocument(),
+  );
+});
+
+test("#8B the New Excerpt dialog warns when the Pratica has no Documento source", async () => {
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace")
+      return {
+        client: { id: "alfa", name: "Alfa S.r.l." },
+        matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+        sources: [],
+        dossiers: [],
+        excerpts: [],
+        citations: [],
+      };
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "+ Nuovo Estratto" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "Nuovo Estratto" });
+  expect(
+    within(dialog).getByText("Nessuna Fonte Documento: importa prima un documento."),
+  ).toBeInTheDocument();
+});
+
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {
   mockIPC((cmd) => {
     if (cmd === "search_workspaces") return [];

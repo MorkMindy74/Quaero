@@ -8,7 +8,7 @@ import { StatusStrip } from "./StatusStrip";
 import { CommandPalette } from "./CommandPalette";
 import { NewMatterDialog } from "./NewMatterDialog";
 import { matters, type MockMatter } from "../../mock/data";
-import { openWorkspace as ipcOpenWorkspace, importDocument } from "../../lib/ipc";
+import { openWorkspace as ipcOpenWorkspace, importDocument, addExcerpt } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
 
@@ -29,6 +29,7 @@ export default function AppShell() {
   const [openError, setOpenError] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [addExcerptError, setAddExcerptError] = useState<string | null>(null);
 
   const openById = async (id: string) => {
     setOpenError(null);
@@ -52,6 +53,24 @@ export default function AppShell() {
       setOpen(await importDocument(open.matter.id, file.name, bytes));
     } catch {
       setImportError(t("documents.importError"));
+    }
+  };
+
+  const handleAddExcerpt = async (args: {
+    sourceId: string;
+    anchorKind: string;
+    anchorValue: string;
+    quote: string;
+    note?: string;
+  }): Promise<boolean> => {
+    setAddExcerptError(null);
+    if (!open) return false;
+    try {
+      setOpen(await addExcerpt({ matterId: open.matter.id, ...args }));
+      return true;
+    } catch {
+      setAddExcerptError(t("excerpts.addError"));
+      return false;
     }
   };
 
@@ -85,6 +104,8 @@ export default function AppShell() {
           workspace={open ?? undefined}
           onImportFile={open ? (file) => void handleImport(file) : undefined}
           importError={importError}
+          onAddExcerpt={open ? handleAddExcerpt : undefined}
+          addExcerptError={addExcerptError}
         />
       </div>
       <StatusStrip />

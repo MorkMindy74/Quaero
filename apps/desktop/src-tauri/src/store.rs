@@ -25,9 +25,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use quaero_core::domain::{
-    Client, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace, WorkspaceView,
+    Anchor, Client, Excerpt, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace,
+    WorkspaceView,
 };
 use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
@@ -71,6 +73,9 @@ pub enum StoreError {
     Corrupt { id: String, reason: String },
     /// The imported file exceeds the size cap.
     TooLarge { limit: u64, actual: u64 },
+    /// A referenced stored file is missing, or its bytes no longer match the
+    /// recorded digest/length — so an Excerpt cannot be pinned to it (#8B).
+    EvidenceIntegrity { source: String, reason: String },
     /// Filesystem error.
     Io(String),
 }
@@ -85,6 +90,12 @@ impl std::fmt::Display for StoreError {
             StoreError::Corrupt { id, reason } => write!(f, "corrupt workspace {id}: {reason}"),
             StoreError::TooLarge { limit, actual } => {
                 write!(f, "file too large: {actual} bytes (limit {limit})")
+            }
+            StoreError::EvidenceIntegrity { source, reason } => {
+                write!(
+                    f,
+                    "evidence integrity failure for source {source}: {reason}"
+                )
             }
             StoreError::Io(msg) => write!(f, "filesystem error: {msg}"),
         }
@@ -112,6 +123,61 @@ fn safe_file_stem(id: &str) -> Result<&str, StoreError> {
     } else {
         Err(StoreError::UnsafeId(id.to_string()))
     }
+}
+
+/// A persisted `StoredFile.stored_name` is generated safely at import
+/// (`doc-<pid>-<n>.<ext>`), but it is a plain string in the canonical model — a
+/// hostile/corrupt JSON could set it to a traversal/absolute path or a Windows
+/// device. Anywhere we turn it into a filesystem path we accept ONLY a name of
+/// the shape Quaero itself generates — a **positive allowlist**, not a denylist:
+/// - only ASCII `[A-Za-z0-9._-]` → closes whole classes at once (`:` drive/ADS,
+///   `$` of `CONIN$`/`CONOUT$`, non-ASCII superscripts like `COM¹`, separators,
+///   NUL, spaces);
+/// - structural: non-empty, no `..`, not absolute, exactly one component, no
+///   trailing `.`;
+/// - plus reserved DOS device basenames (`CON`/`PRN`/`AUX`/`NUL`/`COM1..9`/
+///   `LPT1..9`), case-insensitive, incl. with an extension (e.g. `CON.txt`) —
+///   these use only allowed characters, so the allowlist alone wouldn't catch
+///   them.
+fn is_safe_stored_name(name: &str) -> bool {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        || name.contains("..")
+        || name.ends_with('.')
+        || Path::new(name).is_absolute()
+        || Path::new(name).components().count() != 1
+    {
+        return false;
+    }
+    // The device name is the part before the first `.` (so `NUL.txt` is unsafe).
+    let base = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    !matches!(
+        base.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 /// Resolve the on-disk path for a workspace id, rejecting unsafe ids first.
@@ -219,6 +285,31 @@ fn load_consistent(path: &Path) -> Result<Workspace, StoreError> {
             id: stem.to_string(),
             reason: format!("embedded matter id {embedded:?} does not match file stem {stem:?}"),
         });
+    }
+    // Harden the persisted `storedName` (a plain canonical string): reject any
+    // file whose name is not a bare filename, so a hostile/corrupt JSON cannot
+    // later steer a filesystem read (e.g. the #8B Evidence pin) out of the blob
+    // store via traversal/absolute paths. Caught here, at load, for every reader.
+    for source in ws.sources() {
+        if let Some(file) = source.file.as_ref() {
+            if !is_safe_stored_name(&file.stored_name) {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!("unsafe stored file name {:?}", file.stored_name),
+                });
+            }
+            // A hostile JSON must not be able to inflate the recorded size beyond
+            // the import cap (would otherwise drive an oversized Evidence read).
+            if file.byte_len > MAX_IMPORT_BYTES {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!(
+                        "stored file byteLen {} exceeds the limit {MAX_IMPORT_BYTES}",
+                        file.byte_len
+                    ),
+                });
+            }
+        }
     }
     Ok(ws)
 }
@@ -441,6 +532,233 @@ fn import_document_with(
         .with_source(source)
         .map_err(|e| StoreError::Domain(e.to_string()))?;
     update(workspaces_dir, &updated)?;
+    Ok(updated.view())
+}
+
+/// Per-process counter feeding generated, filesystem-safe excerpt ids.
+static EXCERPT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a safe excerpt id. Never derived from user input (no separators /
+/// traversal). Collisions with an existing excerpt are handled by the caller.
+fn new_excerpt_id() -> String {
+    let n = EXCERPT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("exc-{}-{}", std::process::id(), n)
+}
+
+/// Current UTC time as RFC3339 (`YYYY-MM-DDTHH:MM:SSZ`), std-only (no `chrono`
+/// dependency). Generated in the desktop layer so the pure core stays
+/// clock-free.
+fn now_rfc3339() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    rfc3339_from_unix(secs)
+}
+
+/// Format a Unix timestamp (seconds, UTC) as RFC3339. Pure → unit-testable.
+fn rfc3339_from_unix(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (year, month,
+/// day). Valid for the full proleptic Gregorian range; std-only.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Add a manually-captured [`Excerpt`] to an existing Pratica (#8B).
+///
+/// Contract:
+/// - read-modify-write is serialised **per matter** (no last-write-wins loss);
+/// - the excerpt id is **generated server-side** (path-safe, never from input)
+///   and regenerated on the rare collision with an existing excerpt id;
+/// - `created_at` (RFC3339 UTC) is stamped **here** — the core stays clock-free;
+/// - if the referenced Fonte carries a [`StoredFile`], the actual blob bytes are
+///   **re-hashed under the lock** and the excerpt is pinned to that freshly
+///   computed digest; a missing blob, or bytes disagreeing with the recorded
+///   digest/length, fail with [`StoreError::EvidenceIntegrity`] (no tautological
+///   pin). A fileless Fonte gets no pin;
+/// - persisted via the atomic [`update`] (unique temp + rename);
+/// - empty quote/anchor and referential integrity are enforced by the core.
+#[allow(clippy::too_many_arguments)]
+pub fn add_excerpt(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+) -> Result<WorkspaceView, StoreError> {
+    add_excerpt_with(
+        base,
+        files_dir,
+        matter_id,
+        source_id,
+        anchor_kind,
+        anchor_value,
+        quote,
+        note,
+        &mut new_excerpt_id,
+        &now_rfc3339,
+    )
+}
+
+/// Core of [`add_excerpt`] with injectable id generator and clock (for tests
+/// that force an id collision or assert a deterministic timestamp).
+#[allow(clippy::too_many_arguments)]
+fn add_excerpt_with(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+    gen_id: &mut dyn FnMut() -> String,
+    now: &dyn Fn() -> String,
+) -> Result<WorkspaceView, StoreError> {
+    // Validate the matter id before touching disk.
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    // Serialise read-modify-write per matter.
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    // The referenced Fonte must exist; if it carries a file, the excerpt is
+    // pinned to a FRESHLY COMPUTED digest of the actual stored bytes (Evidence).
+    // We read + hash the blob under the per-matter lock and fail if it is missing
+    // or disagrees with the recorded digest/length — so a tampered/stale blob can
+    // never receive a tautological pin. A fileless Fonte gets no pin; a missing
+    // source yields no pin and the canonical validation below rejects it as a
+    // dangling excerpt.
+    let pin = match workspace.sources().iter().find(|s| s.id.0 == source_id) {
+        Some(source) => match source.file.as_ref() {
+            Some(file) => {
+                // Defence-in-depth: `load_consistent` already rejects unsafe
+                // stored names, but never turn one into a path without checking.
+                if !is_safe_stored_name(&file.stored_name) {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: format!("unsafe stored file name {:?}", file.stored_name),
+                    });
+                }
+                let blob = files_dir.join(&matter_stem).join(&file.stored_name);
+
+                // No-follow metadata on the final path: the evidence blob must be
+                // a REGULAR file (reject symlinks/reparse points, directories,
+                // devices/special files) — never read THROUGH a symlink.
+                let meta =
+                    fs::symlink_metadata(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file missing or unreadable".to_string(),
+                    })?;
+                if !meta.file_type().is_file() {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file is not a regular file (symlink/device/dir rejected)"
+                            .to_string(),
+                    });
+                }
+                // Independent read cap: never read more than the import limit,
+                // regardless of the (untrusted) recorded byteLen.
+                if meta.len() > MAX_IMPORT_BYTES {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: format!(
+                            "stored file exceeds the size limit ({MAX_IMPORT_BYTES} bytes)"
+                        ),
+                    });
+                }
+                // Check the on-disk length against the recorded byteLen BEFORE
+                // reading any bytes: bounds the read and catches tampering early.
+                if meta.len() != file.byte_len {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file length does not match the recorded byteLen"
+                            .to_string(),
+                    });
+                }
+                // Only now read the bytes and verify the digest.
+                let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+                    source: source_id.to_string(),
+                    reason: "stored file missing or unreadable".to_string(),
+                })?;
+                let digest = sha256_hex(&bytes);
+                if digest != file.sha256 {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: "stored file bytes do not match the recorded digest".to_string(),
+                    });
+                }
+                Some(digest)
+            }
+            None => None,
+        },
+        None => None,
+    };
+
+    // Allocate an excerpt id not already used by this workspace.
+    let taken: HashSet<String> = workspace
+        .excerpts()
+        .iter()
+        .map(|e| e.id().0.clone())
+        .collect();
+    let mut attempts = 0u32;
+    let excerpt_id = loop {
+        attempts += 1;
+        if attempts > 1000 {
+            return Err(StoreError::Io(
+                "could not allocate a unique excerpt id".to_string(),
+            ));
+        }
+        let candidate = gen_id();
+        if safe_file_stem(&candidate).is_err() || taken.contains(&candidate) {
+            continue;
+        }
+        break candidate;
+    };
+
+    let excerpt = Excerpt::new_with_meta(
+        excerpt_id,
+        SourceId::new(source_id),
+        Anchor {
+            kind: anchor_kind.to_string(),
+            value: anchor_value.to_string(),
+        },
+        quote,
+        pin,
+        note.map(|n| n.to_string()),
+        Some(now()),
+    )
+    .map_err(|e| StoreError::Domain(e.to_string()))?;
+
+    let updated = workspace
+        .with_excerpt(excerpt)
+        .map_err(|e| StoreError::Domain(e.to_string()))?;
+    update(base, &updated)?;
     Ok(updated.view())
 }
 
@@ -1047,5 +1365,432 @@ mod tests {
             .filter(|s| s.file.is_some())
             .count();
         assert_eq!(n, 1);
+    }
+
+    // ----- #8B: manual Excerpt capture -----
+
+    #[test]
+    fn rfc3339_formats_known_epochs() {
+        assert_eq!(rfc3339_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_from_unix(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn add_excerpt_persists_with_autopin_note_and_timestamp() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view =
+            import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let sha = view.sources[0].file.as_ref().unwrap().sha256.clone();
+
+        let after = add_excerpt(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "clausola",
+            "7.2",
+            "il conduttore...",
+            Some("rilevante"),
+        )
+        .unwrap();
+        assert_eq!(after.excerpts.len(), 1);
+
+        // Reload from disk → persistence after close/reopen.
+        let reopened = open(ws.path(), "m").unwrap();
+        assert_eq!(reopened.excerpts.len(), 1);
+        let ex = &reopened.excerpts[0];
+        assert_eq!(ex.quote(), "il conduttore...");
+        assert_eq!(ex.source_id().0, sid);
+        assert_eq!(ex.anchor().kind, "clausola");
+        assert_eq!(ex.anchor().value, "7.2");
+        assert_eq!(ex.note(), Some("rilevante"));
+        assert_eq!(ex.source_sha256(), Some(sha.as_str())); // auto-pinned
+        assert!(ex.created_at().is_some());
+    }
+
+    #[test]
+    fn add_excerpt_to_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        let r = add_excerpt(ws.path(), files.path(), "nope", "s1", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn add_excerpt_to_unknown_source_is_rejected() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let r = add_excerpt(ws.path(), files.path(), "m", "ghost", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+    }
+
+    #[test]
+    fn add_excerpt_empty_quote_is_rejected_and_not_persisted() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"x").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "   ", None);
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_regenerates_on_id_collision() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"x").unwrap();
+        let sid = view.sources[0].id.0.clone();
+
+        // gen yields: exc-1 (1st add), exc-1 again (collision on 2nd add), exc-2.
+        let mut seq = vec![
+            "exc-1".to_string(),
+            "exc-1".to_string(),
+            "exc-2".to_string(),
+        ]
+        .into_iter();
+        let mut gen = move || seq.next().unwrap();
+        let now = || "2026-06-01T10:00:00Z".to_string();
+
+        add_excerpt_with(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "k",
+            "v",
+            "q1",
+            None,
+            &mut gen,
+            &now,
+        )
+        .unwrap();
+        let after = add_excerpt_with(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "k",
+            "v",
+            "q2",
+            None,
+            &mut gen,
+            &now,
+        )
+        .unwrap();
+
+        let ids: Vec<String> = after.excerpts.iter().map(|e| e.id().0.clone()).collect();
+        assert_eq!(after.excerpts.len(), 2);
+        assert!(ids.contains(&"exc-1".to_string()));
+        assert!(ids.contains(&"exc-2".to_string()));
+        assert_eq!(after.excerpts[0].created_at(), Some("2026-06-01T10:00:00Z"));
+    }
+
+    #[test]
+    fn add_excerpt_rejects_a_tampered_blob_and_persists_nothing() {
+        // Regression for the Codex BLOCKER: the auto-pin must verify the actual
+        // stored bytes, not trust the recorded metadata.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view =
+            import_document(ws.path(), files.path(), "m", "contratto.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Tamper the blob on disk AFTER import (bytes no longer match metadata).
+        let blob = files.path().join("m").join(&stored_name);
+        fs::write(&blob, b"TAMPERED BYTES").unwrap();
+
+        let r = add_excerpt(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "clausola",
+            "7.2",
+            "q",
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        // Nothing persisted — no stale pin slipped through.
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_a_missing_blob() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"bytes").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Delete the blob; the recorded metadata is now dangling.
+        fs::remove_file(files.path().join("m").join(&stored_name)).unwrap();
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_blob_replaced_by_directory() {
+        // A non-regular file (here a directory at the blob path) must be rejected
+        // before any read — covers symlink/reparse/device/dir uniformly.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"bytes").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        let blob = files.path().join("m").join(&stored_name);
+        fs::remove_file(&blob).unwrap();
+        fs::create_dir(&blob).unwrap(); // same name, but a directory now
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn add_excerpt_rejects_same_length_tamper_via_digest() {
+        // Bytes changed but length preserved → caught by the post-read sha check.
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Overwrite with the SAME length (9 bytes) but different content.
+        let blob = files.path().join("m").join(&stored_name);
+        assert_eq!(b"hello pdf".len(), b"HELLO pdf".len());
+        fs::write(&blob, b"HELLO pdf").unwrap();
+
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn load_consistent_rejects_inflated_byte_len() {
+        let dir = tempdir().unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("s1"),
+                kind: SourceType::Documento,
+                title: "x".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: "doc-1-1.pdf".to_string(),
+                    original_name: "x".to_string(),
+                    byte_len: MAX_IMPORT_BYTES + 1, // inflated beyond the cap
+                    sha256: "ab".repeat(32),
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir.path(), &ws).unwrap();
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn add_excerpt_rejects_blob_larger_than_cap_before_reading() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        // Safe name + small byteLen → workspace loads fine…
+        plant_workspace_with_stored_name(dir.path(), "doc-1-1.pdf");
+        // …but the on-disk blob is sparse-huge (> cap); set_len avoids writing 25MB.
+        fs::create_dir_all(files.path().join("m")).unwrap();
+        let blob = files.path().join("m").join("doc-1-1.pdf");
+        let f = fs::File::create(&blob).unwrap();
+        f.set_len(MAX_IMPORT_BYTES + 1).unwrap();
+        drop(f);
+
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(dir.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_excerpt_rejects_symlink_blob() {
+        use std::os::unix::fs::symlink;
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let stored_name = view.sources[0].file.as_ref().unwrap().stored_name.clone();
+
+        // Replace the blob with a symlink to an outside file (same content/len).
+        let target = outside.path().join("secret");
+        fs::write(&target, b"hello pdf").unwrap();
+        let blob = files.path().join("m").join(&stored_name);
+        fs::remove_file(&blob).unwrap();
+        symlink(&target, &blob).unwrap();
+
+        // Even though the target content matches, a symlink is not a regular file.
+        let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    /// Plant a workspace JSON whose Documento source carries a hostile
+    /// `storedName` (bypassing the safe import path), to exercise the read-path
+    /// hardening. The canonical model does not validate `storedName`, so this
+    /// builds + persists directly.
+    fn plant_workspace_with_stored_name(dir: &Path, stored_name: &str) {
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("s1"),
+                kind: SourceType::Documento,
+                title: "x".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: stored_name.to_string(),
+                    original_name: "x".to_string(),
+                    byte_len: 3,
+                    sha256: "ab".repeat(32),
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir, &ws).unwrap();
+    }
+
+    #[test]
+    fn add_excerpt_rejects_traversal_stored_name_and_persists_nothing() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "../../evil.bin");
+        let before = fs::read_to_string(dir.path().join("m.json")).unwrap();
+
+        let r = add_excerpt(
+            dir.path(),
+            files.path(),
+            "m",
+            "s1",
+            "clausola",
+            "7.2",
+            "q",
+            None,
+        );
+        assert!(r.is_err(), "a traversal storedName must be rejected");
+        // Fail-closed: the JSON on disk is unchanged (no excerpt persisted).
+        assert_eq!(
+            fs::read_to_string(dir.path().join("m.json")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn add_excerpt_rejects_absolute_stored_name() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "/etc/passwd");
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(r.is_err(), "an absolute storedName must be rejected");
+    }
+
+    #[test]
+    fn load_consistent_rejects_unsafe_stored_name() {
+        // A hostile/corrupt workspace is intercepted at load, for every reader.
+        let dir = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "..\\..\\evil.bin");
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn is_safe_stored_name_accepts_generated_rejects_hostile() {
+        // import-generated names (doc-<pid>-<n>.<ext>) must keep passing
+        assert!(is_safe_stored_name("doc-123-0.pdf"));
+        assert!(is_safe_stored_name("doc-123-1.pdf"));
+        assert!(is_safe_stored_name(&format!(
+            "doc-{}-7.docx",
+            std::process::id()
+        )));
+        assert!(is_safe_stored_name("exc.bin"));
+        for bad in [
+            "",
+            "..",
+            "../x",
+            "..\\x",
+            "a/b",
+            "a\\b",
+            "/abs",
+            "/etc/passwd",
+            "with\0nul",
+            // outside the ASCII allowlist
+            "C:",
+            "C:foo",
+            "file.txt:stream",
+            "nome con spazio.pdf", // space
+            "CONIN$",              // '$' not allowed
+            "CONOUT$",
+            "COM\u{00B9}.txt", // superscript ¹ → non-ASCII
+            "LPT\u{00B2}.doc", // superscript ²
+            "café.pdf",        // non-ASCII letter
+            // trailing dot
+            "file.",
+            // reserved DOS device names, with and without extension, any case
+            "NUL",
+            "CON",
+            "con",
+            "Aux",
+            "PRN",
+            "COM1",
+            "COM1.txt",
+            "lpt1",
+            "LPT1.pdf",
+            "NUL.docx",
+        ] {
+            assert!(!is_safe_stored_name(bad), "must reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn add_excerpt_rejects_reserved_device_stored_name() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        // A hostile JSON pointing the blob at a Windows console device.
+        plant_workspace_with_stored_name(dir.path(), "CON");
+        let before = fs::read_to_string(dir.path().join("m.json")).unwrap();
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(r.is_err(), "a reserved device storedName must be rejected");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("m.json")).unwrap(),
+            before
+        );
+        // and it is intercepted at load too
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
     }
 }

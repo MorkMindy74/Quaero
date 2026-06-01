@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { TabButton } from "../ui";
+import { TabButton, Button } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
+import { NewExcerptDialog } from "./NewExcerptDialog";
 import {
   workspaceView,
   reasoningSteps,
@@ -100,33 +101,68 @@ function ExcerptsTab({
   excerpts,
   citations,
   sources,
+  onAddExcerpt,
+  addExcerptError,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
   sources: SourceRef[];
+  onAddExcerpt?: (args: {
+    sourceId: string;
+    anchorKind: string;
+    anchorValue: string;
+    quote: string;
+    note?: string;
+  }) => Promise<boolean>;
+  addExcerptError?: string | null;
 }) {
   const { t } = useTranslation();
-  if (excerpts.length === 0) {
-    return <p className="text-sm text-muted">{t("empty.excerpts")}</p>;
-  }
+  const [dialogOpen, setDialogOpen] = useState(false);
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
+  const documentSources = sources.filter((s) => s.kind === "Documento");
+
   return (
     <div className="space-y-3">
-      {excerpts.map((ex) => (
-        <div key={ex.id} className="rounded border border-hairline bg-panel p-2">
-          <div className="font-mono text-[10px] uppercase tracking-wide text-muted">
-            {sourceTitle(ex.sourceId)} · {ex.anchor.kind} {ex.anchor.value}
-          </div>
-          <blockquote className="mt-1 border-l-2 border-hairline pl-2 text-sm">“{ex.quote}”</blockquote>
-          {citations
-            .filter((c) => c.excerptId === ex.id)
-            .map((c) => (
-              <div key={c.id} className="mt-1 text-xs text-muted">
-                ↳ {c.claim}
-              </div>
-            ))}
+      {onAddExcerpt && (
+        <div>
+          <Button type="button" onClick={() => setDialogOpen(true)}>
+            {t("excerpts.new")}
+          </Button>
         </div>
-      ))}
+      )}
+
+      {excerpts.length === 0 ? (
+        <p className="text-sm text-muted">{t("empty.excerpts")}</p>
+      ) : (
+        excerpts.map((ex) => (
+          <div key={ex.id} className="rounded border border-hairline bg-panel p-2">
+            <div className="font-mono text-[10px] uppercase tracking-wide text-muted">
+              {sourceTitle(ex.sourceId)} · {ex.anchor.kind} {ex.anchor.value}
+            </div>
+            <blockquote className="mt-1 border-l-2 border-hairline pl-2 text-sm">“{ex.quote}”</blockquote>
+            {ex.note && <div className="mt-1 text-xs text-muted">— {ex.note}</div>}
+            {ex.createdAt && (
+              <div className="mt-1 font-mono text-[10px] text-muted">{ex.createdAt}</div>
+            )}
+            {citations
+              .filter((c) => c.excerptId === ex.id)
+              .map((c) => (
+                <div key={c.id} className="mt-1 text-xs text-muted">
+                  ↳ {c.claim}
+                </div>
+              ))}
+          </div>
+        ))
+      )}
+
+      {dialogOpen && onAddExcerpt && (
+        <NewExcerptDialog
+          sources={documentSources}
+          error={addExcerptError ?? null}
+          onClose={() => setDialogOpen(false)}
+          onCreate={onAddExcerpt}
+        />
+      )}
     </div>
   );
 }
@@ -236,10 +272,20 @@ export function RightContextPanel({
   workspace,
   onImportFile,
   importError,
+  onAddExcerpt,
+  addExcerptError,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
   importError?: string | null;
+  onAddExcerpt?: (args: {
+    sourceId: string;
+    anchorKind: string;
+    anchorValue: string;
+    quote: string;
+    note?: string;
+  }) => Promise<boolean>;
+  addExcerptError?: string | null;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -303,6 +349,8 @@ export function RightContextPanel({
             excerpts={realExcerpts}
             citations={realCitations}
             sources={workspace?.sources ?? []}
+            onAddExcerpt={onAddExcerpt}
+            addExcerptError={addExcerptError}
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}

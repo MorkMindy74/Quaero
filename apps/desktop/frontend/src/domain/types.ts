@@ -78,6 +78,10 @@ export interface Excerpt {
   anchor: Anchor;
   quote: string;
   sourceSha256?: string;
+  /** Optional free-text note captured manually (#8B). */
+  note?: string;
+  /** RFC3339 UTC timestamp stamped at creation by the backend (#8B). */
+  createdAt?: string;
 }
 
 /** Link between an Affermazione (`claim`) and the Excerpt that supports it.
