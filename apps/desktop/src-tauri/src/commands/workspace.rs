@@ -114,3 +114,62 @@ pub fn export_markdown(app: AppHandle, matter_id: String) -> Result<String, Stri
     let ws_dir = workspaces_dir(&app)?;
     store::workspace_markdown(&ws_dir, &matter_id).map_err(|e| e.to_string())
 }
+
+/// IPC: edit an existing Estratto (quote + anchor + note); the Fonte link, the
+/// sha256 pin and createdAt are preserved by the store. No new capability.
+#[tauri::command]
+pub fn update_excerpt(
+    app: AppHandle,
+    matter_id: String,
+    excerpt_id: String,
+    anchor_kind: String,
+    anchor_value: String,
+    quote: String,
+    note: Option<String>,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::update_excerpt(
+        &ws_dir,
+        &matter_id,
+        &excerpt_id,
+        &anchor_kind,
+        &anchor_value,
+        &quote,
+        note.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// IPC: delete an Estratto. Refused (error) if it is still cited.
+#[tauri::command]
+pub fn delete_excerpt(
+    app: AppHandle,
+    matter_id: String,
+    excerpt_id: String,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::delete_excerpt(&ws_dir, &matter_id, &excerpt_id).map_err(|e| e.to_string())
+}
+
+/// IPC: edit a Citazione's claim (linked Estratto unchanged).
+#[tauri::command]
+pub fn update_citation(
+    app: AppHandle,
+    matter_id: String,
+    citation_id: String,
+    claim: String,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::update_citation(&ws_dir, &matter_id, &citation_id, &claim).map_err(|e| e.to_string())
+}
+
+/// IPC: delete a Citazione (always safe).
+#[tauri::command]
+pub fn delete_citation(
+    app: AppHandle,
+    matter_id: String,
+    citation_id: String,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::delete_citation(&ws_dir, &matter_id, &citation_id).map_err(|e| e.to_string())
+}

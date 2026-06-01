@@ -28,8 +28,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use quaero_core::domain::{
-    Anchor, Citation, Client, Excerpt, ExcerptId, Matter, SourceId, SourceRef, SourceType,
-    StoredFile, Workspace, WorkspaceView,
+    Anchor, Citation, CitationId, Client, Excerpt, ExcerptId, Matter, SourceId, SourceRef,
+    SourceType, StoredFile, Workspace, WorkspaceView,
 };
 use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
@@ -882,6 +882,96 @@ pub fn workspace_markdown(base: &Path, matter_id: &str) -> Result<String, StoreE
     }
     let workspace = load_consistent(&ws_path)?;
     Ok(quaero_core::export::workspace_to_markdown(&workspace))
+}
+
+/// Per-matter locked load → run `op` on the canonical workspace → atomic update,
+/// returning the derived view. Shared by the edit/delete commands.
+fn mutate_workspace(
+    base: &Path,
+    matter_id: &str,
+    op: impl FnOnce(Workspace) -> Result<Workspace, StoreError>,
+) -> Result<WorkspaceView, StoreError> {
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+    let updated = op(workspace)?;
+    update(base, &updated)?;
+    Ok(updated.view())
+}
+
+/// Edit an existing Estratto (#edit/delete): change quote + anchor + note. The
+/// core's `edit_excerpt` preserves the immutable evidence (`sourceId`, the
+/// `sourceSha256` pin and `createdAt`) — the store no longer has to remember to.
+/// Unknown id / empty quote/anchor → `Domain`, nothing persisted.
+#[allow(clippy::too_many_arguments)]
+pub fn update_excerpt(
+    base: &Path,
+    matter_id: &str,
+    excerpt_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+) -> Result<WorkspaceView, StoreError> {
+    mutate_workspace(base, matter_id, |workspace| {
+        workspace
+            .edit_excerpt(
+                &ExcerptId::new(excerpt_id),
+                Anchor {
+                    kind: anchor_kind.to_string(),
+                    value: anchor_value.to_string(),
+                },
+                quote,
+                note.map(|n| n.to_string()),
+            )
+            .map_err(|e| StoreError::Domain(e.to_string()))
+    })
+}
+
+/// Delete an Estratto. Refused (`Domain`, nothing persisted) if it is still cited.
+pub fn delete_excerpt(
+    base: &Path,
+    matter_id: &str,
+    excerpt_id: &str,
+) -> Result<WorkspaceView, StoreError> {
+    mutate_workspace(base, matter_id, |workspace| {
+        workspace
+            .without_excerpt(&ExcerptId::new(excerpt_id))
+            .map_err(|e| StoreError::Domain(e.to_string()))
+    })
+}
+
+/// Edit an existing Citazione: change the `claim`, keeping the linked Estratto.
+pub fn update_citation(
+    base: &Path,
+    matter_id: &str,
+    citation_id: &str,
+    claim: &str,
+) -> Result<WorkspaceView, StoreError> {
+    mutate_workspace(base, matter_id, |workspace| {
+        workspace
+            .edit_citation(&CitationId::new(citation_id), claim)
+            .map_err(|e| StoreError::Domain(e.to_string()))
+    })
+}
+
+/// Delete a Citazione (always safe — citations are leaves).
+pub fn delete_citation(
+    base: &Path,
+    matter_id: &str,
+    citation_id: &str,
+) -> Result<WorkspaceView, StoreError> {
+    mutate_workspace(base, matter_id, |workspace| {
+        workspace
+            .without_citation(&CitationId::new(citation_id))
+            .map_err(|e| StoreError::Domain(e.to_string()))
+    })
 }
 
 #[cfg(test)]
@@ -2050,6 +2140,88 @@ mod tests {
         assert!(matches!(
             open(dir.path(), "m"),
             Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    // ----- edit/delete Estratti e Citazioni -----
+
+    #[test]
+    fn update_excerpt_persists_preserving_pin_and_created_at() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let before = open(ws.path(), "m").unwrap().excerpts[0].clone();
+        let pin = before.source_sha256().map(|s| s.to_string());
+        let created = before.created_at().map(|s| s.to_string());
+
+        update_excerpt(
+            ws.path(),
+            "m",
+            &eid,
+            "pagina",
+            "12",
+            "testo corretto",
+            Some("nota nuova"),
+        )
+        .unwrap();
+
+        let e = open(ws.path(), "m").unwrap().excerpts[0].clone();
+        assert_eq!(e.quote(), "testo corretto");
+        assert_eq!(e.anchor().kind, "pagina");
+        assert_eq!(e.anchor().value, "12");
+        assert_eq!(e.note(), Some("nota nuova"));
+        // invariants preserved
+        assert_eq!(e.source_sha256().map(|s| s.to_string()), pin);
+        assert_eq!(e.created_at().map(|s| s.to_string()), created);
+        assert_eq!(e.source_id().0, before.source_id().0);
+    }
+
+    #[test]
+    fn delete_excerpt_is_blocked_while_cited_then_succeeds() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let view = add_citation(ws.path(), "m", &eid, "Affermazione.").unwrap();
+        let cid = view.citations[0].id().0.clone();
+
+        // cited → blocked, nothing persisted
+        assert!(matches!(
+            delete_excerpt(ws.path(), "m", &eid),
+            Err(StoreError::Domain(_))
+        ));
+        assert_eq!(open(ws.path(), "m").unwrap().excerpts.len(), 1);
+
+        // delete the citation first, then the excerpt
+        delete_citation(ws.path(), "m", &cid).unwrap();
+        delete_excerpt(ws.path(), "m", &eid).unwrap();
+        let v = open(ws.path(), "m").unwrap();
+        assert!(v.excerpts.is_empty());
+        assert!(v.citations.is_empty());
+    }
+
+    #[test]
+    fn update_citation_persists_new_claim() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let view = add_citation(ws.path(), "m", &eid, "Vecchia.").unwrap();
+        let cid = view.citations[0].id().0.clone();
+
+        update_citation(ws.path(), "m", &cid, "Nuova affermazione.").unwrap();
+        let v = open(ws.path(), "m").unwrap();
+        assert_eq!(v.citations[0].claim(), "Nuova affermazione.");
+        assert_eq!(v.citations[0].excerpt_id().0, eid); // link unchanged
+    }
+
+    #[test]
+    fn edit_delete_unknown_id_and_missing_matter_error() {
+        let (ws, _files, _eid) = seed_with_excerpt();
+        assert!(matches!(
+            update_excerpt(ws.path(), "m", "ghost", "k", "v", "q", None),
+            Err(StoreError::Domain(_))
+        ));
+        assert!(matches!(
+            delete_citation(ws.path(), "m", "ghost"),
+            Err(StoreError::Domain(_))
+        ));
+        let empty = tempdir().unwrap();
+        assert!(matches!(
+            delete_excerpt(empty.path(), "nope", "e1"),
+            Err(StoreError::NotFound(_))
         ));
     }
 }
