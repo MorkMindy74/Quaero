@@ -6,10 +6,10 @@
 
 Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italiano. **Non** è una semplice chat su PDF: è uno scheletro applicativo fondato su Pratiche/Fascicoli/Fonte, citazioni ad **Estratti** di Fonte, **Genealogia** del Documento e una UI a cockpit legale. Vedi [`MANIFESTO.md`](MANIFESTO.md).
 
-## Stato attuale (2026-05-31)
+## Stato attuale (2026-06-01)
 
-- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8, #9 e #10 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8, #9 e #10 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + Verificatore citazioni + Privacy Guard. Prossimo step: da decidere (vedi "Prossima sessione").
-- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`9a8d178`**.
+- Fase: **#2, #3, #5 (#5A/#5B/#5C), #6, #7, #8, #9, #10 e #37 COMPLETATE e mergiate in `main`.** Le **issue #5, #6, #7, #8, #9, #10 e #37 sono CHIUSE**: Pratiche (crea/apri/cerca, locale) + ingestione documenti/Evidence v1 + chat controllata stub-only + catena anti-allucinazione (Estratti/Citazioni) + Verificatore citazioni + Privacy Guard + **provider locale Ollama (opt-in, local-only fail-closed)**. Prossimo step: da decidere (vedi "Prossima sessione").
+- Repo: `MorkMindy74/Quaero`, licenza **AGPL-3.0**. `main` @ **`abc8de0`**.
 - **#2** walking skeleton: Cargo workspace + `quaero-core` (puro, no Tauri) + app Tauri (`ping` IPC → core) + frontend React/Vite/TS/Tailwind/i18next (IT default, EN, toggle) + CI minima.
 - **#3** cockpit shell UI: 5 regioni, component kit, leaf mock (Source/Excerpt/Reasoning/Genealogy), card "Genealogia normativa" mock, refinement v0.3.
 - **#5A** modello di dominio reale in `quaero-core` (Cliente→Pratica→Fascicolo/vista→Fonte) + UI mock tipizzata. **PR #20 mergiata**.
@@ -21,8 +21,8 @@ Un **Legal AI Workspace desktop, locale e privacy-first** per il diritto italian
 - **#8** **Citazioni ad Estratti** (cuore anti-allucinazione, ADR-0007): `Excerpt`/`Anchor`/`Citation` nel dominio canonico + persistenza + display read-only nella tab Estratti; invariante "si cita un Estratto, **mai** una Fonte" imposto dal tipo; `sourceSha256` validato contro `SourceRef.file.sha256`; retro-compatibile coi Workspace pre-#8. **PR #30 mergiata** (commit `6d496d8`). **Issue #8 CHIUSA.** Review Codex: giro 1 `changes-requested` (BLOCKER integrità `sourceSha256`) → fix → giro 2 `approve`.
 - **#9** **Verificatore citazioni** (audit & spiegabilità): `verify(&Workspace)` **puro/deterministico** in `quaero-core::verify` → report **derivato** in `WorkspaceView` (mai persistito; `Workspace` canonico invariato); findings `Info`/`Warning` (niente `Error`) — `OrphanExcerpt`, `UnpinnedDocumentExcerpt` (solo con `StoredFile`), `UncitedSource` (Info, non degrada il verdetto); attestazione positiva (conteggi); tab **"Verifica"** read-only; verdetto `warnings==0` → "Catena coerente". **PR #32 mergiata** (commit `159f954`). **Issue #9 CHIUSA.** Review Codex leggera: giro 1 `changes-requested` (SHOULD FIX perf) → fix O(1) a comportamento invariato → verde.
 - **#10** **Privacy Guard** (cintura trasversale, posata **prima** di aprire le porte rischiose): `quaero-core::privacy` puro — `PrivacyPolicy::evaluate(&EgressRequest) -> Decision` reale/deterministico con **default-deny** (`ClientConfidential`/`UserContent` → destinazioni non locali = `Denied`; `NonSensitive`→remoto = `Allowed`; locali sempre `Allowed`); riga privacy read-only nello `StatusStrip`. **Nessun egress reale introdotto.** **PR #34 mergiata** (commit `9a8d178`). **Issue #10 CHIUSA.** Review Codex leggera: `approve`.
-- Test su `main`: **108 Rust** (72 unit core + 8 integration + 28 store desktop) + **43 frontend**; CI verde.
-- **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`.
+- Test su `main`: **119 Rust** (72 unit core + 8 integration + 39 desktop) + **46 frontend**; CI verde.
+- **Processo:** ogni modifica via **branch + PR** con CI verde (vedi `CONTRIBUTING.md`); niente commit diretti su `main`. **Novità: smoke test umano obbligatorio prima del merge** per le feature visibili/rischiose/runtime (vedi `CONTRIBUTING.md` → "Smoke test umano prima del merge").
 - Mockup estetico di riferimento: `UX/index.html`.
 
 ## Glossario core (dettaglio in [`CONTEXT.md`](CONTEXT.md))
@@ -146,6 +146,28 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 
 *(Consolidato dopo review avversariale Codex leggera: `approve`, nessun material finding.)*
 
+## Provider locale Ollama (#37, consolidato)
+
+Slice di **rinforzo**: primo provider che fa **I/O di rete reale**, dietro l'idea di `ChatProvider` ma **local-first ONLY**. Vive nel crate **desktop** (`apps/desktop/src-tauri/src/ollama.rs`), **non** in `quaero-core` (che resta puro/invariato). **PR #38 mergiata** (commit `abc8de0`). **Issue #37 CHIUSA.**
+
+- **Opt-in**: default `StubProvider`; il provider Ollama si attiva **solo** con `QUAERO_CHAT_PROVIDER=ollama`. Endpoint/modello via env (`QUAERO_OLLAMA_URL` default `http://127.0.0.1:11434`, `QUAERO_OLLAMA_MODEL` default `qwen3`).
+- **Privacy Guard nel path**: prima di ogni invio il prompt passa da `PrivacyPolicy::evaluate` (`UserContent` → `LocalModel` = `Allowed`). È il **primo egress reale** e rispetta il vincolo posato in #10; la riga posture dello `StatusStrip` è ora **derivata** (`chat_provider_kind` → "stub offline" oppure "modello locale attivo").
+- **Confine local-only fail-closed su tre vettori** (ciascuno con test di regressione che ne *dimostra* il comportamento):
+  1. **Endpoint** — `validate_local_endpoint()`: solo `http` + host loopback (`127.0.0.1`, `localhost`, `[::1]`); rifiutati host remoti/LAN, `https`, userinfo, URL ambigui (`http://127.0.0.1@evil.com`); validato **prima** del Guard e di ogni invio.
+  2. **Redirect** — client reqwest con `.redirect(Policy::none())`; ogni risposta 3xx è trattata come errore, **mai seguita** (chiude il re-invio del prompt off-device via `Location`).
+  3. **Proxy ambientale** — `.no_proxy()`: `HTTP_PROXY`/`ALL_PROXY` ignorati (niente routing del prompt via proxy non-loopback).
+- **Payload minimo**: inviati **solo** prompt utente + system prompt fisso (framing ADR-0007: bozza non verificata, senza citazioni, non parere legale). **Zero** documenti, Fonti, Estratti, quote, RAG, byte o file.
+- **Nessun segreto/cloud**: nessuna API key, nessuna lettura di `OLLAMA_API_KEY`, nessun host esterno, nessun `https://ollama.com`. Non-streaming, timeout ~120s, nessun panic (errori come `String`).
+- **Dipendenze/capability**: `reqwest` aggiunta come dep **desktop** diretta con feature minime (`default-features=false`, `["json"]`), **`Cargo.lock` invariato** (era già nel lock transitivamente). **Nessuna nuova capability Tauri** (`core:default`); il client Rust non passa dalla webview.
+
+**Nota hardening differita (CAN WAIT, non blocker):** `localhost` è accettato in v1; un remap via file `hosts` verso un IP remoto resta teoricamente possibile (richiede già compromissione della macchina locale → fuori scope v1). **Hardening futuro possibile:** restringere ai soli loopback **numerici** (`127.0.0.1` / `::1`), rimuovendo `localhost`.
+
+**Smoke test umano:** la regola (vedi `CONTRIBUTING.md`) è stata **formalizzata dopo** l'apertura/merge di questa PR, quindi per #37 lo smoke test manuale del provider reale verrà eseguito **subito dopo questo checkpoint docs e prima di iniziare qualunque altra slice**.
+
+**Fuori da #37** (slice future): provider **remoto**/cloud, API key/secret store, consenso persistito, streaming, grounding/Citazioni reali via LLM, OSINT, UI di settings del provider, hardening loopback-numerico.
+
+*(Consolidato dopo 4 giri di review avversariale Codex sul confine privacy/local-only: giro 1 BLOCKER env-URL off-device → fix endpoint fail-closed; giro 2 critico redirect → fix `Policy::none()`; giro 3 critico proxy ambientale → fix `.no_proxy()`; giro 4 `approve-with-notes`, nessun blocker né should-fix.)*
+
 ## ADR approvati (`docs/adr/`) — 11 ADR
 
 | ADR | Decisione |
@@ -165,7 +187,7 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 ## Issue aperte (GitHub)
 
 - **#1** — PRD (fondazione) + addendum architetturale.
-- Slice di lavoro **#2 → #15** (figlie del PRD). Tipo: AFK = un agente può prenderla; HITL = serve una decisione umana.
+- Slice di lavoro **#2 → #15** (figlie del PRD) + slice di **rinforzo** fuori sequenza (es. **#37** provider locale Ollama). Tipo: AFK = un agente può prenderla; HITL = serve una decisione umana.
 
 | Issue | Slice | Tipo | Bloccata da |
 |------|-------|------|-------------|
@@ -178,6 +200,7 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 | #8  | ✅ **CHIUSA** — Citazioni ad Estratti: Excerpt/Anchor/Citation canonici + persistenza + display read-only; "si cita un Estratto, non una Fonte"; `sourceSha256` validato. Creazione UI + clic→evidenzia = #8B futura | AFK | #7 |
 | #9  | ✅ **CHIUSA** — Verificatore citazioni: `verify(&Workspace)` puro + report derivato in `WorkspaceView` + tab "Verifica" read-only; `UncitedSource` Info non degrada il verdetto. Re-hash fisico = slice futura | AFK | #8 |
 | #10 | ✅ **CHIUSA** — Privacy guard: contratto `quaero-core::privacy` + `PrivacyPolicy::evaluate` default-deny + riga `StatusStrip`. Enforcement su egress reale = slice future | AFK | #8 |
+| #37 | ✅ **CHIUSA** — *(rinforzo)* Provider locale Ollama dietro `ChatProvider`, local-only fail-closed (endpoint loopback + no-redirect + no-proxy), opt-in via env, default stub, Privacy Guard nel path. **Primo egress reale.** Provider remoto/cloud = slice future | AFK | #7, #10 |
 | #11 | Connettore Normattiva | AFK | #10 |
 | #12 | Valuta clausola + proposta + export DOCX | AFK | #8 |
 | #13 | Connettore giurisprudenza | AFK | #11 |
@@ -193,11 +216,13 @@ Cintura di sicurezza **trasversale** posata **prima** di aprire le porte rischio
 
 ## Prossima sessione
 
-**#2, #3, l'intera #5, #6, #7, #8, #9 e #10 completate e mergiate; issue #5, #6, #7, #8, #9 e #10 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata**, e **Privacy Guard** (cintura privacy) in casa. Prossimo step da decidere insieme.
+**#2, #3, l'intera #5, #6, #7, #8, #9, #10 e #37 completate e mergiate; issue #5, #6, #7, #8, #9, #10 e #37 CHIUSE.** Pratiche end-to-end, documenti come Fonti (Evidence v1), chat stub-only, catena anti-allucinazione **modellata/validata/auditata**, **Privacy Guard** (cintura privacy) e **provider locale Ollama** (primo egress reale, local-only fail-closed) in casa. Prossimo step da decidere insieme.
 
-Candidati naturali: **provider LLM reale** dietro `ChatProvider` **+ Privacy Guard** (preflight + Codex **obbligatoria** — sarebbe il **primo egress reale**, deve passare dal Guard e rendere derivata la posture line); **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#12** (Valuta clausola + proposta + export DOCX); oppure le slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
+**Da fare prima di qualunque nuova slice:** **smoke test umano del provider locale Ollama (#37)** — la regola è stata formalizzata dopo il merge, quindi la verifica manuale del comportamento reale (avvio Ollama locale + opt-in env + risposta nel path Privacy Guard) va eseguita ora, prima di aprire altro.
 
-Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**.
+Candidati naturali: **#8B** (creazione Estratti da UI + clic→evidenzia + parsing reale); **#12** (Valuta clausola + proposta + export DOCX); provider **remoto**/cloud dietro `ChatProvider` (+ Privacy Guard, secondo egress reale); oppure slice di rinforzo — **`chunked document import`** (robustezza payload IPC), **ri-hash fisico** dei file (verifica integrità su disco), **hardening loopback-numerico** del provider Ollama, **UI refinement** mock↔reale. Resta anche **#4 Installer** (HITL).
+
+Regola operativa: niente codice prima di rileggere questo checkpoint e confermare il piano; per i **confini critici** (dominio canonico, persistenza, filesystem, IPC Tauri, parsing file caricati, dati cliente, AI che produce atti/citazioni, genealogia, migrazioni, cloud/connettori) → **Codex adversarial-review prima del merge**; per le **feature visibili/rischiose/runtime** (provider reale, OSINT, export DOCX/PDF, import/parsing, UI importante, privacy/security runtime, byte/FS, dati cliente, connettori) → **smoke test umano prima del merge** (vedi `CONTRIBUTING.md`).
 
 **Ambiente (Windows):** i comandi `cargo` richiedono l'ambiente VS Build Tools caricato — usare la **"x64 Native Tools Command Prompt for VS 2022"** oppure caricare `vcvars64.bat` (`...\BuildTools\VC\Auxiliary\Build\vcvars64.bat`), altrimenti il linker MSVC non è nel PATH. Verifica rapida:
 
