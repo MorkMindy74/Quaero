@@ -125,6 +125,21 @@ fn safe_file_stem(id: &str) -> Result<&str, StoreError> {
     }
 }
 
+/// A persisted `StoredFile.stored_name` is generated safely at import, but it is
+/// a plain string in the canonical model — a hostile/corrupt JSON could set it
+/// to a traversal/absolute path. Anywhere we turn it into a filesystem path we
+/// require a **bare filename**: non-empty, no `..`, no `/`/`\`/NUL, not absolute,
+/// exactly one path component.
+fn is_safe_stored_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && !Path::new(name).is_absolute()
+        && Path::new(name).components().count() == 1
+}
+
 /// Resolve the on-disk path for a workspace id, rejecting unsafe ids first.
 fn workspace_path(base: &Path, id: &str) -> Result<PathBuf, StoreError> {
     let stem = safe_file_stem(id)?;
@@ -230,6 +245,20 @@ fn load_consistent(path: &Path) -> Result<Workspace, StoreError> {
             id: stem.to_string(),
             reason: format!("embedded matter id {embedded:?} does not match file stem {stem:?}"),
         });
+    }
+    // Harden the persisted `storedName` (a plain canonical string): reject any
+    // file whose name is not a bare filename, so a hostile/corrupt JSON cannot
+    // later steer a filesystem read (e.g. the #8B Evidence pin) out of the blob
+    // store via traversal/absolute paths. Caught here, at load, for every reader.
+    for source in ws.sources() {
+        if let Some(file) = source.file.as_ref() {
+            if !is_safe_stored_name(&file.stored_name) {
+                return Err(StoreError::Corrupt {
+                    id: stem.to_string(),
+                    reason: format!("unsafe stored file name {:?}", file.stored_name),
+                });
+            }
+        }
     }
     Ok(ws)
 }
@@ -577,6 +606,14 @@ fn add_excerpt_with(
     let pin = match workspace.sources().iter().find(|s| s.id.0 == source_id) {
         Some(source) => match source.file.as_ref() {
             Some(file) => {
+                // Defence-in-depth: `load_consistent` already rejects unsafe
+                // stored names, but never turn one into a path without checking.
+                if !is_safe_stored_name(&file.stored_name) {
+                    return Err(StoreError::EvidenceIntegrity {
+                        source: source_id.to_string(),
+                        reason: format!("unsafe stored file name {:?}", file.stored_name),
+                    });
+                }
                 let blob = files_dir.join(&matter_stem).join(&file.stored_name);
                 let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
                     source: source_id.to_string(),
@@ -1415,5 +1452,97 @@ mod tests {
         let r = add_excerpt(ws.path(), files.path(), "m", &sid, "k", "v", "q", None);
         assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
         assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    /// Plant a workspace JSON whose Documento source carries a hostile
+    /// `storedName` (bypassing the safe import path), to exercise the read-path
+    /// hardening. The canonical model does not validate `storedName`, so this
+    /// builds + persists directly.
+    fn plant_workspace_with_stored_name(dir: &Path, stored_name: &str) {
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("s1"),
+                kind: SourceType::Documento,
+                title: "x".to_string(),
+                meta: String::new(),
+                file: Some(StoredFile {
+                    stored_name: stored_name.to_string(),
+                    original_name: "x".to_string(),
+                    byte_len: 3,
+                    sha256: "ab".repeat(32),
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir, &ws).unwrap();
+    }
+
+    #[test]
+    fn add_excerpt_rejects_traversal_stored_name_and_persists_nothing() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "../../evil.bin");
+        let before = fs::read_to_string(dir.path().join("m.json")).unwrap();
+
+        let r = add_excerpt(
+            dir.path(),
+            files.path(),
+            "m",
+            "s1",
+            "clausola",
+            "7.2",
+            "q",
+            None,
+        );
+        assert!(r.is_err(), "a traversal storedName must be rejected");
+        // Fail-closed: the JSON on disk is unchanged (no excerpt persisted).
+        assert_eq!(
+            fs::read_to_string(dir.path().join("m.json")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn add_excerpt_rejects_absolute_stored_name() {
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "/etc/passwd");
+        let r = add_excerpt(dir.path(), files.path(), "m", "s1", "k", "v", "q", None);
+        assert!(r.is_err(), "an absolute storedName must be rejected");
+    }
+
+    #[test]
+    fn load_consistent_rejects_unsafe_stored_name() {
+        // A hostile/corrupt workspace is intercepted at load, for every reader.
+        let dir = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "..\\..\\evil.bin");
+        assert!(matches!(
+            open(dir.path(), "m"),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn is_safe_stored_name_accepts_generated_rejects_hostile() {
+        assert!(is_safe_stored_name("doc-123-0.pdf"));
+        assert!(is_safe_stored_name("exc.bin"));
+        for bad in [
+            "",
+            "..",
+            "../x",
+            "..\\x",
+            "a/b",
+            "a\\b",
+            "/abs",
+            "/etc/passwd",
+            "with\0nul",
+        ] {
+            assert!(!is_safe_stored_name(bad), "must reject {bad:?}");
+        }
     }
 }
