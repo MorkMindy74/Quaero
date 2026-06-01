@@ -13,6 +13,7 @@ import {
   importDocument,
   addExcerpt,
   addCitation,
+  exportMarkdown,
 } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
@@ -36,6 +37,7 @@ export default function AppShell() {
   const [importError, setImportError] = useState<string | null>(null);
   const [addExcerptError, setAddExcerptError] = useState<string | null>(null);
   const [addCitationError, setAddCitationError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const openById = async (id: string) => {
     setOpenError(null);
@@ -92,6 +94,26 @@ export default function AppShell() {
     }
   };
 
+  const handleExportMarkdown = async () => {
+    setExportError(null);
+    if (!open) return;
+    try {
+      const md = await exportMarkdown(open.matter.id);
+      // Download via Blob in the webview — no Rust file write, no save dialog.
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${open.matter.id}.md`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setExportError(t("export.error"));
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -126,6 +148,8 @@ export default function AppShell() {
           addExcerptError={addExcerptError}
           onAddCitation={open ? handleAddCitation : undefined}
           addCitationError={addCitationError}
+          onExportMarkdown={open ? () => void handleExportMarkdown() : undefined}
+          exportError={exportError}
         />
       </div>
       <StatusStrip />

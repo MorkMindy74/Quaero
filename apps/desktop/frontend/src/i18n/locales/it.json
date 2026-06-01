@@ -38,6 +38,8 @@
   "citations.claim": "Affermazione (claim)",
   "citations.save": "Salva Citazione",
   "citations.addError": "Impossibile salvare la Citazione.",
+  "export.markdown": "Esporta Markdown",
+  "export.error": "Esportazione non riuscita.",
   "chat.disclaimer": "Chat esplorativa: le risposte non sono verificate, non contengono citazioni e non costituiscono un parere legale.",
   "chat.empty": "Inizia una conversazione esplorativa su questa Pratica.",
   "chat.placeholder": "Scrivi un messaggio…",

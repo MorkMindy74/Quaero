@@ -92,6 +92,13 @@ export function addCitation(args: {
   });
 }
 
+/** Render a Pratica as a grounded Markdown report (#12 decomposition). Returns
+ *  the Markdown string; the caller downloads it via a Blob (no file is written
+ *  by the backend, no save dialog). */
+export function exportMarkdown(matterId: string): Promise<string> {
+  return invoke<string>("export_markdown", { matterId });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */

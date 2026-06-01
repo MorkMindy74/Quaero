@@ -106,6 +106,8 @@ function ExcerptsTab({
   addExcerptError,
   onAddCitation,
   addCitationError,
+  onExportMarkdown,
+  exportError,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
@@ -120,6 +122,8 @@ function ExcerptsTab({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
+  onExportMarkdown?: () => void;
+  exportError?: string | null;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -129,12 +133,24 @@ function ExcerptsTab({
 
   return (
     <div className="space-y-3">
-      {onAddExcerpt && (
-        <div>
-          <Button type="button" onClick={() => setDialogOpen(true)}>
-            {t("excerpts.new")}
-          </Button>
+      {(onAddExcerpt || onExportMarkdown) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {onAddExcerpt && (
+            <Button type="button" onClick={() => setDialogOpen(true)}>
+              {t("excerpts.new")}
+            </Button>
+          )}
+          {onExportMarkdown && (
+            <Button type="button" onClick={onExportMarkdown}>
+              {t("export.markdown")}
+            </Button>
+          )}
         </div>
+      )}
+      {exportError && (
+        <p role="alert" className="text-xs text-accent-warning">
+          {exportError}
+        </p>
       )}
 
       {excerpts.length === 0 ? (
@@ -300,6 +316,8 @@ export function RightContextPanel({
   addExcerptError,
   onAddCitation,
   addCitationError,
+  onExportMarkdown,
+  exportError,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -314,6 +332,8 @@ export function RightContextPanel({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
+  onExportMarkdown?: () => void;
+  exportError?: string | null;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -381,6 +401,8 @@ export function RightContextPanel({
             addExcerptError={addExcerptError}
             onAddCitation={onAddCitation}
             addCitationError={addCitationError}
+            onExportMarkdown={onExportMarkdown}
+            exportError={exportError}
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}
