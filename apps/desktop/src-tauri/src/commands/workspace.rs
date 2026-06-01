@@ -90,3 +90,18 @@ pub fn add_excerpt(
     )
     .map_err(|e| e.to_string())
 }
+
+/// IPC: create a manual Citazione (citations-from-UI) linking a `claim` to an
+/// existing Estratto of a Pratica. The citation id is generated server-side;
+/// referential integrity (citation → excerpt) is enforced by the core. No
+/// filesystem/blob access, no extra capability: only the canonical JSON updates.
+#[tauri::command]
+pub fn add_citation(
+    app: AppHandle,
+    matter_id: String,
+    excerpt_id: String,
+    claim: String,
+) -> Result<WorkspaceView, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::add_citation(&ws_dir, &matter_id, &excerpt_id, &claim).map_err(|e| e.to_string())
+}

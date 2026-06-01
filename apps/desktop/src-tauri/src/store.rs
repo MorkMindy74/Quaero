@@ -28,8 +28,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use quaero_core::domain::{
-    Anchor, Client, Excerpt, Matter, SourceId, SourceRef, SourceType, StoredFile, Workspace,
-    WorkspaceView,
+    Anchor, Citation, Client, Excerpt, ExcerptId, Matter, SourceId, SourceRef, SourceType,
+    StoredFile, Workspace, WorkspaceView,
 };
 use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
@@ -757,6 +757,88 @@ fn add_excerpt_with(
 
     let updated = workspace
         .with_excerpt(excerpt)
+        .map_err(|e| StoreError::Domain(e.to_string()))?;
+    update(base, &updated)?;
+    Ok(updated.view())
+}
+
+/// Per-process counter feeding generated, filesystem-safe citation ids.
+static CITATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a safe citation id. Never derived from user input; collisions with
+/// an existing citation are handled by the caller.
+fn new_citation_id() -> String {
+    let n = CITATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("cit-{}-{}", std::process::id(), n)
+}
+
+/// Add a manual Citation (#8 / citations-from-UI) linking a `claim` to an
+/// existing Excerpt of a Pratica.
+///
+/// Contract:
+/// - read-modify-write serialised **per matter** (no last-write-wins loss);
+/// - the citation id is **generated server-side** (path-safe shape; never from
+///   input) and regenerated on the rare collision with an existing citation;
+/// - referential integrity (citation → excerpt exists; id unique) and an empty
+///   `claim` are rejected by the core (mapped to `StoreError::Domain`); nothing
+///   is persisted on failure;
+/// - persisted via the atomic [`update`]. No filesystem/blob access: a Citation
+///   references an `excerptId`, never a file.
+pub fn add_citation(
+    base: &Path,
+    matter_id: &str,
+    excerpt_id: &str,
+    claim: &str,
+) -> Result<WorkspaceView, StoreError> {
+    add_citation_with(base, matter_id, excerpt_id, claim, &mut new_citation_id)
+}
+
+/// Core of [`add_citation`] with an injectable id generator (for tests that
+/// force a collision).
+fn add_citation_with(
+    base: &Path,
+    matter_id: &str,
+    excerpt_id: &str,
+    claim: &str,
+    gen_id: &mut dyn FnMut() -> String,
+) -> Result<WorkspaceView, StoreError> {
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    // Allocate a citation id not already used by this workspace.
+    let taken: HashSet<String> = workspace
+        .citations()
+        .iter()
+        .map(|c| c.id().0.clone())
+        .collect();
+    let mut attempts = 0u32;
+    let citation_id = loop {
+        attempts += 1;
+        if attempts > 1000 {
+            return Err(StoreError::Io(
+                "could not allocate a unique citation id".to_string(),
+            ));
+        }
+        let candidate = gen_id();
+        if safe_file_stem(&candidate).is_err() || taken.contains(&candidate) {
+            continue;
+        }
+        break candidate;
+    };
+
+    let citation = Citation::new(citation_id, claim, ExcerptId::new(excerpt_id))
+        .map_err(|e| StoreError::Domain(e.to_string()))?;
+
+    let updated = workspace
+        .with_citation(citation)
         .map_err(|e| StoreError::Domain(e.to_string()))?;
     update(base, &updated)?;
     Ok(updated.view())
@@ -1792,5 +1874,88 @@ mod tests {
             open(dir.path(), "m"),
             Err(StoreError::Corrupt { .. })
         ));
+    }
+
+    // ----- citations-from-UI -----
+
+    /// Seed a Pratica "m" with one Documento source + one Excerpt, returning the
+    /// (ws dir, files dir, excerpt id) for citation tests.
+    fn seed_with_excerpt() -> (tempfile::TempDir, tempfile::TempDir, String) {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view = import_document(ws.path(), files.path(), "m", "c.pdf", b"hello pdf").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let view = add_excerpt(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "clausola",
+            "7.2",
+            "Il conduttore è tenuto.",
+            None,
+        )
+        .unwrap();
+        let eid = view.excerpts[0].id().0.clone();
+        (ws, files, eid)
+    }
+
+    #[test]
+    fn add_citation_persists_and_reloads_linked_to_excerpt() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let after =
+            add_citation(ws.path(), "m", &eid, "Recesso con preavviso di 15 giorni.").unwrap();
+        assert_eq!(after.citations.len(), 1);
+
+        let reopened = open(ws.path(), "m").unwrap();
+        assert_eq!(reopened.citations.len(), 1);
+        let c = &reopened.citations[0];
+        assert_eq!(c.claim(), "Recesso con preavviso di 15 giorni.");
+        assert_eq!(c.excerpt_id().0, eid);
+    }
+
+    #[test]
+    fn add_citation_to_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        let r = add_citation(ws.path(), "nope", "e1", "x");
+        assert!(matches!(r, Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn add_citation_to_unknown_excerpt_is_rejected() {
+        let (ws, _files, _eid) = seed_with_excerpt();
+        let r = add_citation(ws.path(), "m", "ghost", "x");
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        // exactly one citation never appeared
+        assert!(open(ws.path(), "m").unwrap().citations.is_empty());
+    }
+
+    #[test]
+    fn add_citation_empty_claim_is_rejected_and_not_persisted() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let r = add_citation(ws.path(), "m", &eid, "   ");
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        assert!(open(ws.path(), "m").unwrap().citations.is_empty());
+    }
+
+    #[test]
+    fn add_citation_regenerates_on_id_collision() {
+        let (ws, _files, eid) = seed_with_excerpt();
+        let mut seq = vec![
+            "cit-1".to_string(),
+            "cit-1".to_string(),
+            "cit-2".to_string(),
+        ]
+        .into_iter();
+        let mut gen = move || seq.next().unwrap();
+
+        add_citation_with(ws.path(), "m", &eid, "prima", &mut gen).unwrap();
+        let after = add_citation_with(ws.path(), "m", &eid, "seconda", &mut gen).unwrap();
+
+        let ids: Vec<String> = after.citations.iter().map(|c| c.id().0.clone()).collect();
+        assert_eq!(after.citations.len(), 2);
+        assert!(ids.contains(&"cit-1".to_string()));
+        assert!(ids.contains(&"cit-2".to_string()));
     }
 }

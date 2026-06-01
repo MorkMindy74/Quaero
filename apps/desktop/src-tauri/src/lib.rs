@@ -14,6 +14,7 @@ pub fn run() {
             commands::workspace::search_workspaces,
             commands::workspace::import_document,
             commands::workspace::add_excerpt,
+            commands::workspace::add_citation,
             commands::chat::chat_send,
             commands::chat::chat_provider_kind,
         ])
