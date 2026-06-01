@@ -403,7 +403,7 @@ test("export grounded: 'Esporta Markdown' calls export_markdown and triggers a d
 
   const context = screen.getByTestId("region-context");
   fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
-  fireEvent.click(await within(context).findByRole("button", { name: "Esporta Markdown" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "Esporta report Markdown" }));
 
   await waitFor(() => expect(exportedMatter).toBe("m"));
   await waitFor(() => expect(createObjURL).toHaveBeenCalled());
