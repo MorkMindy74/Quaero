@@ -105,3 +105,12 @@ pub fn add_citation(
     let ws_dir = workspaces_dir(&app)?;
     store::add_citation(&ws_dir, &matter_id, &excerpt_id, &claim).map_err(|e| e.to_string())
 }
+
+/// IPC: render a Pratica as a grounded Markdown report (#12 decomposition). The
+/// backend returns the Markdown string; the frontend downloads it via a Blob.
+/// No file is written by Rust, no save dialog, no extra capability.
+#[tauri::command]
+pub fn export_markdown(app: AppHandle, matter_id: String) -> Result<String, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    store::workspace_markdown(&ws_dir, &matter_id).map_err(|e| e.to_string())
+}

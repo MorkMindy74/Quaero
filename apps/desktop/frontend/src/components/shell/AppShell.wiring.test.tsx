@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import AppShell from "./AppShell";
 import "../../i18n";
 import type { Client, Matter } from "../../domain/types";
@@ -366,6 +366,92 @@ test("citations-from-UI: '+ Cita' on an excerpt calls add_citation and shows the
   await waitFor(() =>
     expect(within(context).getByText(/Recesso con preavviso di 15 giorni/)).toBeInTheDocument(),
   );
+});
+
+test("export grounded: 'Esporta Markdown' calls export_markdown and triggers a download", async () => {
+  let exportedMatter: string | null = null;
+  // jsdom implements neither; stub so the Blob-download path runs.
+  const createObjURL = vi.fn(() => "blob:mock");
+  // jsdom provides no implementation at runtime; assign stubs (types exist).
+  URL.createObjectURL = createObjURL;
+  URL.revokeObjectURL = vi.fn();
+  const clickSpy = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => {});
+
+  mockIPC((cmd, args) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace")
+      return {
+        client: { id: "alfa", name: "Alfa S.r.l." },
+        matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+        sources: [],
+        dossiers: [],
+        excerpts: [],
+        citations: [],
+      };
+    if (cmd === "export_markdown") {
+      exportedMatter = (args as { matterId: string }).matterId;
+      return "# Quaero — Report Evidence\n";
+    }
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "Esporta report Markdown" }));
+
+  await waitFor(() => expect(exportedMatter).toBe("m"));
+  await waitFor(() => expect(createObjURL).toHaveBeenCalled());
+  expect(clickSpy).toHaveBeenCalled();
+  // visible feedback after export (no silent action)
+  await waitFor(() =>
+    expect(within(context).getByText("Markdown esportato.")).toBeInTheDocument(),
+  );
+  clickSpy.mockRestore();
+});
+
+test("#8B Save button is disabled with a hint until the anchor reference is filled", async () => {
+  mockIPC((cmd) => {
+    if (cmd === "search_workspaces")
+      return [{ id: "rossi-1", client: "Alfa S.r.l.", title: "Rossi c. Bianchi" }];
+    if (cmd === "open_workspace")
+      return {
+        client: { id: "alfa", name: "Alfa S.r.l." },
+        matter: { id: "m", client: "alfa", title: "Rossi c. Bianchi", subject: "s" },
+        sources: [{ id: "s1", kind: "Documento", title: "Contratto.pdf", meta: "" }],
+        dossiers: [],
+        excerpts: [],
+        citations: [],
+      };
+  });
+
+  render(<AppShell />);
+  const sidebar = screen.getByTestId("region-sidebar");
+  fireEvent.click(await within(sidebar).findByText("Rossi c. Bianchi"));
+  const context = screen.getByTestId("region-context");
+  fireEvent.click(within(context).getByRole("tab", { name: "Estratti" }));
+  fireEvent.click(await within(context).findByRole("button", { name: "+ Nuovo Estratto" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "Nuovo Estratto" });
+  // Fill only the quote (anchor "Riferimento" left empty) → Save disabled + hint.
+  fireEvent.change(within(dialog).getByLabelText("Testo dell'Estratto"), {
+    target: { value: '<img src="https://example.com/x">' },
+  });
+  const save = within(dialog).getByRole("button", { name: "Salva Estratto" });
+  expect(save).toBeDisabled();
+  expect(within(dialog).getByText(/Per salvare:/)).toBeInTheDocument();
+
+  // Fill the missing anchor reference → Save enabled, hint gone.
+  fireEvent.change(within(dialog).getByLabelText("Riferimento (es. 3, 7.2)"), {
+    target: { value: "3" },
+  });
+  expect(save).toBeEnabled();
+  expect(within(dialog).queryByText(/Per salvare:/)).not.toBeInTheDocument();
 });
 
 test("#9 the Verifica tab shows the empty state when no workspace is open", () => {

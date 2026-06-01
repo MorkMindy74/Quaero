@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TabButton, Button } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
@@ -106,6 +106,8 @@ function ExcerptsTab({
   addExcerptError,
   onAddCitation,
   addCitationError,
+  onExportMarkdown,
+  exportError,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
@@ -120,21 +122,67 @@ function ExcerptsTab({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
+  onExportMarkdown?: () => Promise<boolean>;
+  exportError?: string | null;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [citing, setCiting] = useState<Excerpt | null>(null);
+  const [exportState, setExportState] = useState<"idle" | "busy" | "done">("idle");
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceTitle = (id: string) => sources.find((s) => s.id === id)?.title ?? id;
   const documentSources = sources.filter((s) => s.kind === "Documento");
 
+  // Clear any pending auto-hide timer on unmount.
+  useEffect(() => () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+  }, []);
+
+  const handleExport = async () => {
+    if (!onExportMarkdown) return;
+    // A new export resets the previous "Markdown esportato." message immediately.
+    if (hideTimer.current) {
+      clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setExportState("busy");
+    const ok = await onExportMarkdown();
+    setExportState(ok ? "done" : "idle");
+    // The success message is transient → auto-hide so it never refers ambiguously
+    // to an older export.
+    if (ok) {
+      hideTimer.current = setTimeout(() => setExportState("idle"), 4000);
+    }
+  };
+
   return (
     <div className="space-y-3">
-      {onAddExcerpt && (
-        <div>
-          <Button type="button" onClick={() => setDialogOpen(true)}>
-            {t("excerpts.new")}
-          </Button>
+      {(onAddExcerpt || onExportMarkdown) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {onAddExcerpt && (
+            <Button type="button" onClick={() => setDialogOpen(true)}>
+              {t("excerpts.new")}
+            </Button>
+          )}
+          {onExportMarkdown && (
+            <Button type="button" disabled={exportState === "busy"} onClick={() => void handleExport()}>
+              {exportState === "busy" ? t("export.exporting") : t("export.markdown")}
+            </Button>
+          )}
         </div>
+      )}
+      {onExportMarkdown && (
+        <p className="text-[11px] text-muted">{t("export.hint")}</p>
+      )}
+      {exportState === "done" && (
+        <p role="status" className="text-xs text-accent-verified">
+          {t("export.done")}
+        </p>
+      )}
+      {exportError && (
+        <p role="alert" className="text-xs text-accent-warning">
+          {exportError}
+        </p>
       )}
 
       {excerpts.length === 0 ? (
@@ -300,6 +348,8 @@ export function RightContextPanel({
   addExcerptError,
   onAddCitation,
   addCitationError,
+  onExportMarkdown,
+  exportError,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -314,6 +364,8 @@ export function RightContextPanel({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
+  onExportMarkdown?: () => Promise<boolean>;
+  exportError?: string | null;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -381,6 +433,8 @@ export function RightContextPanel({
             addExcerptError={addExcerptError}
             onAddCitation={onAddCitation}
             addCitationError={addCitationError}
+            onExportMarkdown={onExportMarkdown}
+            exportError={exportError}
           />
         )}
         {tab === "reasoning" && reasoningSteps.map((step) => <ReasoningStep key={step.id} step={step} />)}
