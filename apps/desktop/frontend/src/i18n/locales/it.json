@@ -251,5 +251,6 @@
   "workspace.review.uncited": "Estratto senza Citazione",
   "workspace.reasoningEmpty": "Il ragionamento tracciato passo-passo non è ancora disponibile in questa versione.",
   "workspace.genealogyEmpty": "Nessun Documento generato da Quaero per questa Pratica: la Genealogia comparirà quando esporterai e validerai un atto.",
-  "workspace.draftingEmpty": "La redazione assistita non è ancora disponibile in questa versione."
+  "workspace.draftingEmpty": "La redazione assistita non è ancora disponibile in questa versione.",
+  "workspace.chatUngrounded": "Chat esplorativa: non legge i documenti della Pratica e non cita le fonti. La chat fondata sui tuoi documenti arriverà più avanti."
 }

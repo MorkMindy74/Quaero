@@ -29,6 +29,14 @@ test("open Pratica: real header + guided card + the mode switcher (real workbenc
   expect(screen.getByRole("group", { name: "Modalità" })).toBeInTheDocument();
 });
 
+test("open Pratica defaults to the grounded Revisione, NOT the exploratory chat", () => {
+  render(<MainWorkspace matter={null} workspace={makeWorkspace()} />);
+  // The centre foregrounds the real grounded work…
+  expect(screen.getByTestId("surface-review")).toBeInTheDocument();
+  // …and does NOT open on the ungrounded chat.
+  expect(screen.queryByTestId("surface-conversation")).not.toBeInTheDocument();
+});
+
 test("Revisione mode shows the REAL chain (Estratto + Affermazione) of the open Pratica", () => {
   render(<MainWorkspace matter={null} workspace={makeWorkspace()} />);
   fireEvent.click(screen.getByRole("button", { name: "Revisione" }));
@@ -61,10 +69,12 @@ test("Ragionamento mode is an honest empty-state — NO mock reasoning data", ()
   expect(screen.queryByText(/La clausola 7\.2 consente il recesso/)).not.toBeInTheDocument();
 });
 
-test("Conversazione mode renders the real chat surface", () => {
+test("Conversazione mode renders the real chat surface with an honest ungrounded note", () => {
   render(<MainWorkspace matter={null} workspace={makeWorkspace()} />);
   fireEvent.click(screen.getByRole("button", { name: "Conversazione" }));
   expect(screen.getByTestId("surface-conversation")).toBeInTheDocument();
+  // The lawyer must know the chat does NOT read the documents.
+  expect(screen.getByText(/non legge i documenti/i)).toBeInTheDocument();
 });
 
 test("fallback (no real Pratica) keeps the mock surfaces unchanged", () => {

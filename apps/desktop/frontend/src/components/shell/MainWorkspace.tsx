@@ -26,6 +26,9 @@ interface MainWorkspaceProps {
 export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWorkspaceProps) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<ModeId>("conversation");
+  // The REAL open Pratica defaults to the grounded work (Revisione), NOT the
+  // ungrounded exploratory chat (#64): the centre foregrounds what has value.
+  const [realMode, setRealMode] = useState<ModeId>("review");
 
   if (workspace) {
     return (
@@ -37,7 +40,7 @@ export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWo
             {workspace.matter.subject ? ` · ${workspace.matter.subject}` : ""}
           </p>
           <div className="mt-3">
-            <ModeSwitcher active={mode} onChange={setMode} />
+            <ModeSwitcher active={realMode} onChange={setRealMode} />
           </div>
         </div>
         <div className="min-h-0 flex-1 space-y-6 overflow-auto p-6">
@@ -51,7 +54,7 @@ export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWo
             onExport={() => onExport?.() ?? Promise.resolve(false)}
           />
           {/* The workbench: each mode bound to the REAL Pratica (#64). */}
-          <RealModeSurface mode={mode} workspace={workspace} />
+          <RealModeSurface mode={realMode} workspace={workspace} />
         </div>
       </main>
     );
@@ -157,10 +160,19 @@ function RealModeSurface({ mode, workspace }: { mode: ModeId; workspace: Workspa
       </div>
     );
   }
-  // conversation (default): the real, matter-scoped exploratory chat (#7).
+  // conversation: the real, matter-scoped EXPLORATORY chat (#7). It does NOT
+  // read the Pratica's documents — say so honestly; the grounded chat is V2.
   return (
-    <div className="h-[420px]">
-      <ChatPanel key={workspace.matter.id} />
+    <div className="space-y-2">
+      <p
+        role="note"
+        className="rounded border border-dashed border-hairline bg-panel-2 px-3 py-2 text-[11px] text-muted"
+      >
+        {t("workspace.chatUngrounded")}
+      </p>
+      <div className="h-[420px]">
+        <ChatPanel key={workspace.matter.id} />
+      </div>
     </div>
   );
 }
