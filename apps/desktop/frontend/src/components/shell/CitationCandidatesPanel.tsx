@@ -54,6 +54,13 @@ export function CitationCandidatesPanel({
   const approve = async (row: Row) => {
     // Never approve an invalid candidate (Estratto gone); guard re-entrancy.
     if (row.created || !row.valid || acceptingRef.current.has(row.key)) return;
+    // Defence: re-verify the linked Estratto still exists in the CURRENT excerpts
+    // (it may have been deleted, or the workspace changed) — never approve a stale
+    // candidate. The `excerpts` prop is always the open Pratica's current set.
+    if (!excerpts.some((e) => e.id === row.excerptId)) {
+      patch(row.key, { valid: false, error: t("citationAI.invalidHint") });
+      return;
+    }
     acceptingRef.current.add(row.key);
     setAccepting([...acceptingRef.current]);
     patch(row.key, { error: null });

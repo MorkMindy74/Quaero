@@ -87,6 +87,30 @@ test("double-clicking Approva creates the Citation only once (re-entrancy guard)
   expect(onAccept).toHaveBeenCalledTimes(1);
 });
 
+test("a stale candidate is not approvable after the excerpt set changes (re-check)", async () => {
+  const cand: CitationCandidate[] = [
+    { excerptId: "e1", claim: "Affermazione su e1.", reason: "m", valid: true },
+  ];
+  const onPropose = vi.fn(async () => cand);
+  const onAccept = vi.fn(async (_e: string, _c: string) => true);
+  const { rerender } = render(
+    <CitationCandidatesPanel excerpts={EXCERPTS} onPropose={onPropose} onAccept={onAccept} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Proponi Citazioni" }));
+  await screen.findByTestId("citation-candidate");
+
+  // The open Pratica's excerpt set changes: e1 is no longer present.
+  rerender(
+    <CitationCandidatesPanel excerpts={[EXCERPTS[1]]} onPropose={onPropose} onAccept={onAccept} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Approva → crea Citazione" }));
+
+  await waitFor(() =>
+    expect(screen.getByTestId("citation-candidate-status")).toHaveTextContent("non valida"),
+  );
+  expect(onAccept).not.toHaveBeenCalled();
+});
+
 test("empty proposal shows a hint", async () => {
   renderPanel({ propose: async () => [] });
   fireEvent.click(screen.getByRole("button", { name: "Proponi Citazioni" }));

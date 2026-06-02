@@ -123,10 +123,12 @@ function ExcerptsTab({
   onUpdateCitation,
   onDeleteCitation,
   onProposeCitations,
+  matterId,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
   sources: SourceRef[];
+  matterId?: string;
   onAddExcerpt?: (args: ExcerptDialogValues) => Promise<boolean>;
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
@@ -250,6 +252,8 @@ function ExcerptsTab({
 
       {onProposeCitations && onAddCitation && excerpts.length > 0 && (
         <CitationCandidatesPanel
+          // Remount per Pratica so candidates never survive a matter switch.
+          key={matterId ?? "no-matter"}
           excerpts={excerpts}
           onPropose={onProposeCitations}
           onAccept={onAddCitation}
@@ -699,6 +703,7 @@ export function RightContextPanel({
             onAddCitation={onAddCitation}
             addCitationError={addCitationError}
             onProposeCitations={onProposeCitations}
+            matterId={workspace?.matter.id}
             onExportMarkdown={onExportMarkdown}
             exportError={exportError}
             onUpdateExcerpt={onUpdateExcerpt}
