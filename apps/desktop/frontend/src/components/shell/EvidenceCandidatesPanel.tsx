@@ -31,11 +31,7 @@ export function EvidenceCandidatesPanel({
   source: SourceRef;
   localEnabled?: boolean;
   onPropose: (matterId: string, sourceId: string) => Promise<EvidenceCandidate[]>;
-  onProposeLocal?: (
-    matterId: string,
-    sourceId: string,
-    consent: boolean,
-  ) => Promise<LocalEvidenceResult>;
+  onProposeLocal?: (matterId: string, sourceId: string) => Promise<LocalEvidenceResult>;
   onAccept: (
     matterId: string,
     sourceId: string,
@@ -89,7 +85,7 @@ export function EvidenceCandidatesPanel({
     setConsentOpen(false);
     setBusy(true);
     try {
-      const res = await onProposeLocal(matterId, source.id, true);
+      const res = await onProposeLocal(matterId, source.id);
       setRows(
         res.candidates.map((c, i) => ({
           quote: c.quote,

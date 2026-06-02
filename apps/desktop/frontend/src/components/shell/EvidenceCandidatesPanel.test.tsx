@@ -121,7 +121,7 @@ test("empty proposal (no text layer) shows a hint", async () => {
 // ----- V1B: local Ollama Evidence provider (consent gated) -----
 
 function renderWithLocal(result: LocalEvidenceResult) {
-  const onProposeLocal = vi.fn(async (_m: string, _s: string, _c: boolean) => result);
+  const onProposeLocal = vi.fn(async (_m: string, _s: string) => result);
   render(
     <EvidenceCandidatesPanel
       matterId="m"
@@ -164,7 +164,7 @@ test("confirming consent calls the local provider; invalid candidates are not ap
   fireEvent.click(screen.getByRole("button", { name: "Proponi con modello locale" }));
   fireEvent.click(screen.getByRole("button", { name: "Invia al modello locale" }));
 
-  await waitFor(() => expect(onProposeLocal).toHaveBeenCalledWith("m", "s1", true));
+  await waitFor(() => expect(onProposeLocal).toHaveBeenCalledWith("m", "s1"));
   await waitFor(() => expect(screen.getAllByTestId("evidence-candidate")).toHaveLength(2));
 
   const statuses = screen.getAllByTestId("evidence-candidate-status");

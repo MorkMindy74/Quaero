@@ -2,6 +2,7 @@
 //! maps IPC commands onto pure core logic (ADR-0011); it holds no domain logic.
 
 mod commands;
+mod evidence_consent;
 mod evidence_ollama;
 mod local_model;
 mod ollama;
@@ -30,6 +31,7 @@ pub fn run() {
             commands::evidence::accept_evidence_candidate,
             commands::evidence::propose_evidence_local,
             commands::evidence::evidence_provider_kind,
+            commands::evidence::request_evidence_consent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quaero");

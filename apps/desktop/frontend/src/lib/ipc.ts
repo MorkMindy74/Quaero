@@ -214,16 +214,28 @@ export function evidenceProviderKind(): Promise<string> {
   return invoke<string>("evidence_provider_kind");
 }
 
-/** Propose Evidence candidates via the LOCAL Ollama model (#58, V1B). Requires
- *  explicit `consent` (the backend refuses without it) AND the opt-in env. The
- *  document text layer is sent only to a loopback model, via the Privacy Guard.
- *  Candidates are NOT persisted; each carries a `valid` flag. */
+/** Issue a one-shot consent token (#58) after the lawyer confirms the dialog.
+ *  Bound by the backend to (matterId, sourceId, sha256), short-lived, single-use.
+ *  No text is read or sent here. */
+export function requestEvidenceConsent(matterId: string, sourceId: string): Promise<string> {
+  return invoke<string>("request_evidence_consent", { matterId, sourceId });
+}
+
+/** Propose Evidence candidates via the LOCAL Ollama model (#58, V1B). Requires a
+ *  valid one-shot `consentToken` (from `requestEvidenceConsent`) AND the opt-in
+ *  env — the backend consumes the token before any send. The document text layer
+ *  is sent only to a loopback model, via the Privacy Guard. Candidates are NOT
+ *  persisted; each carries a `valid` flag. */
 export function proposeEvidenceLocal(
   matterId: string,
   sourceId: string,
-  consent: boolean,
+  consentToken: string,
 ): Promise<LocalEvidenceResult> {
-  return invoke<LocalEvidenceResult>("propose_evidence_local", { matterId, sourceId, consent });
+  return invoke<LocalEvidenceResult>("propose_evidence_local", {
+    matterId,
+    sourceId,
+    consentToken,
+  });
 }
 
 /** Turn an approved candidate into a real Estratto (#55). The backend verifies,

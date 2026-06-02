@@ -35,6 +35,11 @@ const TIMEOUT_SECS: u64 = 120;
 /// documents are truncated with an explicit notice (no silent drop, no chunking).
 pub const MAX_MODEL_INPUT_CHARS: usize = 12_000;
 
+/// Hard cap on the model's HTTP response body (bytes), read in a bounded loop
+/// BEFORE any JSON parsing — a broken/injected local model cannot force the app
+/// to buffer/deserialize an unbounded body (fail-closed resource guard).
+const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
+
 /// Per-field caps + candidate count, enforced on the model's (untrusted) JSON.
 const QUOTE_MAX: usize = 2_000;
 const REASON_MAX: usize = 300;
@@ -125,6 +130,11 @@ struct RawCandidate {
 fn parse_candidates(content: &str) -> Result<Vec<EvidenceCandidate>, String> {
     let raw: RawOut = serde_json::from_str(content)
         .map_err(|_| "risposta del modello non valida (JSON non conforme)".to_string())?;
+    // Fail-closed on an implausible candidate count (broken/injected model): reject
+    // the whole batch rather than silently truncating.
+    if raw.candidates.len() > MAX_CANDS {
+        return Err("risposta del modello non valida (troppi candidati)".to_string());
+    }
     let mut out = Vec::new();
     for c in raw.candidates {
         let quote = c.quote.trim().to_string();
@@ -152,11 +162,22 @@ fn parse_candidates(content: &str) -> Result<Vec<EvidenceCandidate>, String> {
             anchor_value,
             reason,
         });
-        if out.len() >= MAX_CANDS {
-            break;
-        }
     }
     Ok(out)
+}
+
+/// Read an HTTP response body in a bounded loop, failing closed if it exceeds
+/// [`MAX_RESPONSE_BYTES`]. Never buffers/parses an unbounded body. The error is
+/// generic (no content).
+async fn read_bounded(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(map_send_error)? {
+        if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err("risposta del modello troppo grande (oltre il limite)".to_string());
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 /// Local Ollama Evidence provider. Endpoint/model from env, localhost defaults.
@@ -211,10 +232,10 @@ impl OllamaEvidenceProvider {
         if !resp.status().is_success() {
             return Err(map_status_error(resp.status().as_u16()));
         }
+        // Bounded read BEFORE parsing: reject an oversized body fail-closed.
+        let body = read_bounded(resp).await?;
         // Generic parse error — never echo the raw model output.
-        let parsed: ChatLikeResponse = resp
-            .json()
-            .await
+        let parsed: ChatLikeResponse = serde_json::from_slice(&body)
             .map_err(|_| "risposta del modello non valida".to_string())?;
         let content = parsed.message.map(|m| m.content).unwrap_or_default();
 
@@ -332,15 +353,63 @@ mod tests {
     }
 
     #[test]
-    fn parse_caps_candidate_count() {
+    fn parse_accepts_up_to_max_candidates() {
         let one = r#"{"quote":"q","reason":"r","anchorKind":"k","anchorValue":"v"}"#;
         let many = std::iter::repeat(one)
-            .take(MAX_CANDS + 10)
+            .take(MAX_CANDS)
             .collect::<Vec<_>>()
             .join(",");
         let content = format!(r#"{{"candidates":[{many}]}}"#);
-        let cands = parse_candidates(&content).unwrap();
-        assert_eq!(cands.len(), MAX_CANDS);
+        assert_eq!(parse_candidates(&content).unwrap().len(), MAX_CANDS);
+    }
+
+    #[test]
+    fn parse_fails_closed_on_too_many_candidates() {
+        // More than MAX_CANDS → rejected wholesale (no silent truncation).
+        let one = r#"{"quote":"q","reason":"r","anchorKind":"k","anchorValue":"v"}"#;
+        let many = std::iter::repeat(one)
+            .take(MAX_CANDS + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        let content = format!(r#"{{"candidates":[{many}]}}"#);
+        assert!(parse_candidates(&content).is_err());
+    }
+
+    /// Fail-closed resource guard: a local model returning an oversized body is
+    /// rejected (bounded read) BEFORE any JSON parsing, with a generic error.
+    #[test]
+    fn oversized_response_is_rejected_fail_closed() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut s, peer)) = listener.accept() {
+                assert!(peer.ip().is_loopback());
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let big = "a".repeat(MAX_RESPONSE_BYTES + 4096);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{big}",
+                    big.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+
+        let provider = OllamaEvidenceProvider {
+            base_url: format!("http://127.0.0.1:{port}"),
+            model: "qwen3".to_string(),
+        };
+        let err = tauri::async_runtime::block_on(provider.propose("documento")).unwrap_err();
+        handle.join().ok();
+        assert!(
+            err.contains("troppo grande"),
+            "expected oversize error, got: {err}"
+        );
     }
 
     /// Local-only regression for the Evidence provider: a loopback server that

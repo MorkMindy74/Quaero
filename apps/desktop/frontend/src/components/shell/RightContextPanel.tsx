@@ -381,7 +381,6 @@ function SourcesTab({
   onProposeEvidenceLocal?: (
     matterId: string,
     sourceId: string,
-    consent: boolean,
   ) => Promise<LocalEvidenceResult>;
 }) {
   const { t } = useTranslation();
@@ -605,7 +604,6 @@ export function RightContextPanel({
   onProposeEvidenceLocal?: (
     matterId: string,
     sourceId: string,
-    consent: boolean,
   ) => Promise<LocalEvidenceResult>;
 }) {
   const { t } = useTranslation();
