@@ -10,13 +10,13 @@ use tauri::{AppHandle, Manager};
 use crate::store::{self, SourceText, WorkspaceSummary};
 
 /// Resolve the per-app `workspaces/` directory under the OS app-data location.
-fn workspaces_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn workspaces_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(base.join("workspaces"))
 }
 
 /// Resolve the per-app `files/` blob directory (sibling of `workspaces/`).
-fn files_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn files_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(base.join("files"))
 }

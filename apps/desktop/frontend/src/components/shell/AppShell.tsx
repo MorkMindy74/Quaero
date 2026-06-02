@@ -20,6 +20,8 @@ import {
   deleteCitation,
   getSourceText,
   setSourceText,
+  proposeEvidence,
+  acceptEvidenceCandidate,
 } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
@@ -153,6 +155,26 @@ export default function AppShell() {
     }
   };
 
+  // #55 Evidence Assistant: approving a candidate creates a real Estratto
+  // (server-side verified against the text layer) and refreshes the open view.
+  const handleAcceptEvidence = async (
+    matterId: string,
+    sourceId: string,
+    anchorKind: string,
+    anchorValue: string,
+    quote: string,
+    note?: string,
+  ): Promise<boolean> => {
+    if (!open) return false;
+    try {
+      setOpen(await acceptEvidenceCandidate(matterId, sourceId, anchorKind, anchorValue, quote, note));
+      return true;
+    } catch {
+      // Refused (e.g. quote not in the text layer) → the panel shows a message.
+      return false;
+    }
+  };
+
   const handleExportMarkdown = async (): Promise<boolean> => {
     setExportError(null);
     if (!open) return false;
@@ -217,6 +239,8 @@ export default function AppShell() {
           onDeleteCitation={open ? handleDeleteCitation : undefined}
           onGetSourceText={open ? getSourceText : undefined}
           onSetSourceText={open ? setSourceText : undefined}
+          onProposeEvidence={open ? proposeEvidence : undefined}
+          onAcceptEvidence={open ? handleAcceptEvidence : undefined}
         />
       </div>
       <StatusStrip />

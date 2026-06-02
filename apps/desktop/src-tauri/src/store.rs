@@ -31,6 +31,7 @@ use quaero_core::domain::{
     Anchor, Citation, CitationId, Client, Excerpt, ExcerptId, Matter, SourceId, SourceRef,
     SourceType, StoredFile, Workspace, WorkspaceView,
 };
+use quaero_core::evidence::quote_occurs_in_text;
 use quaero_core::hash::sha256_hex;
 use quaero_core::persistence;
 use serde::Serialize;
@@ -680,78 +681,46 @@ fn add_excerpt_with(
     }
     let workspace = load_consistent(&ws_path)?;
 
-    // The referenced Fonte must exist; if it carries a file, the excerpt is
-    // pinned to a FRESHLY COMPUTED digest of the actual stored bytes (Evidence).
-    // We read + hash the blob under the per-matter lock and fail if it is missing
-    // or disagrees with the recorded digest/length — so a tampered/stale blob can
-    // never receive a tautological pin. A fileless Fonte gets no pin; a missing
-    // source yields no pin and the canonical validation below rejects it as a
-    // dangling excerpt.
-    let pin = match workspace.sources().iter().find(|s| s.id.0 == source_id) {
-        Some(source) => match source.file.as_ref() {
-            Some(file) => {
-                // Defence-in-depth: `load_consistent` already rejects unsafe
-                // stored names, but never turn one into a path without checking.
-                if !is_safe_stored_name(&file.stored_name) {
-                    return Err(StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: format!("unsafe stored file name {:?}", file.stored_name),
-                    });
-                }
-                let blob = files_dir.join(&matter_stem).join(&file.stored_name);
+    persist_excerpt(
+        base,
+        files_dir,
+        &matter_stem,
+        workspace,
+        source_id,
+        anchor_kind,
+        anchor_value,
+        quote,
+        note,
+        gen_id,
+        now,
+    )
+}
 
-                // No-follow metadata on the final path: the evidence blob must be
-                // a REGULAR file (reject symlinks/reparse points, directories,
-                // devices/special files) — never read THROUGH a symlink.
-                let meta =
-                    fs::symlink_metadata(&blob).map_err(|_| StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: "stored file missing or unreadable".to_string(),
-                    })?;
-                if !meta.file_type().is_file() {
-                    return Err(StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: "stored file is not a regular file (symlink/device/dir rejected)"
-                            .to_string(),
-                    });
-                }
-                // Independent read cap: never read more than the import limit,
-                // regardless of the (untrusted) recorded byteLen.
-                if meta.len() > MAX_IMPORT_BYTES {
-                    return Err(StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: format!(
-                            "stored file exceeds the size limit ({MAX_IMPORT_BYTES} bytes)"
-                        ),
-                    });
-                }
-                // Check the on-disk length against the recorded byteLen BEFORE
-                // reading any bytes: bounds the read and catches tampering early.
-                if meta.len() != file.byte_len {
-                    return Err(StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: "stored file length does not match the recorded byteLen"
-                            .to_string(),
-                    });
-                }
-                // Only now read the bytes and verify the digest.
-                let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
-                    source: source_id.to_string(),
-                    reason: "stored file missing or unreadable".to_string(),
-                })?;
-                let digest = sha256_hex(&bytes);
-                if digest != file.sha256 {
-                    return Err(StoreError::EvidenceIntegrity {
-                        source: source_id.to_string(),
-                        reason: "stored file bytes do not match the recorded digest".to_string(),
-                    });
-                }
-                Some(digest)
-            }
-            None => None,
-        },
-        None => None,
-    };
+/// Shared tail of excerpt creation, under the caller's per-matter lock: compute
+/// the Evidence pin, allocate a unique server-side id, build the canonical
+/// [`Excerpt`] (empty quote/anchor + referential integrity enforced by the
+/// core), persist atomically, and return the derived view. Used by
+/// `add_excerpt_with` (manual #8B) and `accept_evidence_candidate_with` (#55,
+/// after the quote has been verified against the text layer).
+#[allow(clippy::too_many_arguments)]
+fn persist_excerpt(
+    base: &Path,
+    files_dir: &Path,
+    matter_stem: &str,
+    workspace: Workspace,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+    gen_id: &mut dyn FnMut() -> String,
+    now: &dyn Fn() -> String,
+) -> Result<WorkspaceView, StoreError> {
+    // The referenced Fonte must exist; if it carries a file, the excerpt is
+    // pinned to a FRESHLY COMPUTED digest of the actual stored bytes (Evidence)
+    // via `compute_excerpt_pin` — no tautological pin. A fileless/missing source
+    // gets no pin and the canonical validation rejects a dangling excerpt.
+    let pin = compute_excerpt_pin(files_dir, matter_stem, &workspace, source_id)?;
 
     // Allocate an excerpt id not already used by this workspace.
     let taken: HashSet<String> = workspace
@@ -793,6 +762,79 @@ fn add_excerpt_with(
         .map_err(|e| StoreError::Domain(e.to_string()))?;
     update(base, &updated)?;
     Ok(updated.view())
+}
+
+/// Compute the Evidence sha256 pin for an excerpt against a source, under the
+/// caller's per-matter lock. If the referenced Fonte carries a [`StoredFile`],
+/// the actual blob bytes are re-hashed (a missing blob, a non-regular file,
+/// oversize, a length mismatch, or a digest disagreement all fail with
+/// [`StoreError::EvidenceIntegrity`] — no tautological pin). A fileless or
+/// missing source gets no pin (`None`); the canonical validation then rejects a
+/// dangling excerpt. Shared by `add_excerpt_with` and `accept_evidence_candidate`.
+fn compute_excerpt_pin(
+    files_dir: &Path,
+    matter_stem: &str,
+    workspace: &Workspace,
+    source_id: &str,
+) -> Result<Option<String>, StoreError> {
+    let Some(source) = workspace.sources().iter().find(|s| s.id.0 == source_id) else {
+        return Ok(None);
+    };
+    let Some(file) = source.file.as_ref() else {
+        return Ok(None);
+    };
+    // Defence-in-depth: `load_consistent` already rejects unsafe stored names,
+    // but never turn one into a path without checking.
+    if !is_safe_stored_name(&file.stored_name) {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: format!("unsafe stored file name {:?}", file.stored_name),
+        });
+    }
+    let blob = files_dir.join(matter_stem).join(&file.stored_name);
+
+    // No-follow metadata on the final path: the evidence blob must be a REGULAR
+    // file (reject symlinks/reparse points, directories, devices) — never read
+    // THROUGH a symlink.
+    let meta = fs::symlink_metadata(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+        source: source_id.to_string(),
+        reason: "stored file missing or unreadable".to_string(),
+    })?;
+    if !meta.file_type().is_file() {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "stored file is not a regular file (symlink/device/dir rejected)".to_string(),
+        });
+    }
+    // Independent read cap: never read more than the import limit, regardless of
+    // the (untrusted) recorded byteLen.
+    if meta.len() > MAX_IMPORT_BYTES {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: format!("stored file exceeds the size limit ({MAX_IMPORT_BYTES} bytes)"),
+        });
+    }
+    // Check the on-disk length against the recorded byteLen BEFORE reading any
+    // bytes: bounds the read and catches tampering early.
+    if meta.len() != file.byte_len {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "stored file length does not match the recorded byteLen".to_string(),
+        });
+    }
+    // Only now read the bytes and verify the digest.
+    let bytes = fs::read(&blob).map_err(|_| StoreError::EvidenceIntegrity {
+        source: source_id.to_string(),
+        reason: "stored file missing or unreadable".to_string(),
+    })?;
+    let digest = sha256_hex(&bytes);
+    if digest != file.sha256 {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "stored file bytes do not match the recorded digest".to_string(),
+        });
+    }
+    Ok(Some(digest))
 }
 
 /// Per-process counter feeding generated, filesystem-safe citation ids.
@@ -1141,15 +1183,25 @@ pub fn get_source_text(
         .iter()
         .find(|s| s.id.0 == source_id)
         .ok_or_else(|| StoreError::Domain(format!("unknown source: {source_id}")))?;
-    let file = match source.file.as_ref() {
-        Some(f) => f,
+    read_text_layer(files_dir, &matter_stem, source)
+}
+
+/// Read the text-layer sidecar of an already-resolved source (#52). Fileless
+/// Fonte or missing sidecar → `Absent`; whitespace-only → `Empty`; otherwise
+/// `Available` with the text. A non-regular file, oversize, or non-UTF-8 sidecar
+/// is `Corrupt` (fail-closed). Shared by `get_source_text` (lock-free read) and
+/// `accept_evidence_candidate` (under the per-matter lock).
+fn read_text_layer(
+    files_dir: &Path,
+    matter_stem: &str,
+    source: &SourceRef,
+) -> Result<SourceText, StoreError> {
+    let Some(file) = source.file.as_ref() else {
         // A reference-only Fonte legitimately has no document → no text layer.
-        None => {
-            return Ok(SourceText {
-                status: SourceTextStatus::Absent,
-                text: None,
-            })
-        }
+        return Ok(SourceText {
+            status: SourceTextStatus::Absent,
+            text: None,
+        });
     };
     if !is_safe_stored_name(&file.stored_name) {
         return Err(StoreError::Domain(format!(
@@ -1159,7 +1211,7 @@ pub fn get_source_text(
     }
 
     let sidecar = files_dir
-        .join(&matter_stem)
+        .join(matter_stem)
         .join(format!("{}.txt", file.stored_name));
 
     // No-follow metadata: a missing sidecar is simply Absent; a non-regular file
@@ -1175,23 +1227,125 @@ pub fn get_source_text(
     };
     if !meta.file_type().is_file() {
         return Err(StoreError::Corrupt {
-            id: matter_stem,
+            id: matter_stem.to_string(),
             reason: "text sidecar is not a regular file".to_string(),
         });
     }
     if meta.len() > MAX_TEXT_BYTES {
         return Err(StoreError::Corrupt {
-            id: matter_stem,
+            id: matter_stem.to_string(),
             reason: "text sidecar exceeds the size limit".to_string(),
         });
     }
 
     let bytes = fs::read(&sidecar)?;
     let text = String::from_utf8(bytes).map_err(|_| StoreError::Corrupt {
-        id: matter_stem.clone(),
+        id: matter_stem.to_string(),
         reason: "text sidecar is not valid UTF-8".to_string(),
     })?;
     Ok(classify_text(&text))
+}
+
+/// Create a REAL Estratto from an approved AI Evidence candidate (#55).
+///
+/// Anti-hallucination, enforced server-side **under the per-matter lock**: the
+/// candidate `quote` must occur (whitespace-normalized) in the source's current
+/// text layer (#52, sha-pinned to the immutable blob). A source without an
+/// available text layer, or a quote not present in it, is refused with **no
+/// write** — so a real Estratto can never be created from text that is not in the
+/// Fonte. On success the excerpt is created exactly like [`add_excerpt`]
+/// (server-side id + `createdAt` + freshly recomputed sha pin), so Evidence
+/// integrity and the #9/#12 invariants are identical to a manual Estratto.
+#[allow(clippy::too_many_arguments)]
+pub fn accept_evidence_candidate(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+) -> Result<WorkspaceView, StoreError> {
+    accept_evidence_candidate_with(
+        base,
+        files_dir,
+        matter_id,
+        source_id,
+        anchor_kind,
+        anchor_value,
+        quote,
+        note,
+        &mut new_excerpt_id,
+        &now_rfc3339,
+    )
+}
+
+/// Core of [`accept_evidence_candidate`] with injectable id generator and clock.
+#[allow(clippy::too_many_arguments)]
+fn accept_evidence_candidate_with(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+    anchor_kind: &str,
+    anchor_value: &str,
+    quote: &str,
+    note: Option<&str>,
+    gen_id: &mut dyn FnMut() -> String,
+    now: &dyn Fn() -> String,
+) -> Result<WorkspaceView, StoreError> {
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    // One per-matter lock for the whole verify-then-create operation: the quote
+    // is checked against the text layer and the excerpt is written atomically
+    // without any window in between (no TOCTOU against the sha-pinned blob).
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    // The source must exist and currently expose an AVAILABLE text layer; the
+    // quote must occur in it (anti-hallucination, ADR-0007).
+    let source = workspace
+        .sources()
+        .iter()
+        .find(|s| s.id.0 == source_id)
+        .ok_or_else(|| StoreError::Domain(format!("unknown source: {source_id}")))?;
+    let layer = read_text_layer(files_dir, &matter_stem, source)?;
+    let text = match layer.status {
+        SourceTextStatus::Available => layer.text.unwrap_or_default(),
+        _ => {
+            return Err(StoreError::Domain(format!(
+                "source {source_id} has no available text layer"
+            )))
+        }
+    };
+    if !quote_occurs_in_text(&text, quote) {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "quote not found in the document text layer".to_string(),
+        });
+    }
+
+    // Verified: create the real Estratto on the same path as a manual one.
+    persist_excerpt(
+        base,
+        files_dir,
+        &matter_stem,
+        workspace,
+        source_id,
+        anchor_kind,
+        anchor_value,
+        quote,
+        note,
+        gen_id,
+        now,
+    )
 }
 
 #[cfg(test)]
@@ -2684,5 +2838,151 @@ mod tests {
         set_source_text(ws.path(), files.path(), "m", &sid, &sha, "seconda").unwrap();
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
         assert_eq!(got.text.as_deref(), Some("seconda"));
+    }
+
+    // ----- #55 AI Evidence Assistant: accept_evidence_candidate -----
+
+    #[test]
+    fn accept_candidate_with_present_quote_creates_pinned_excerpt() {
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Articolo 1. Il conduttore è tenuto.\nArticolo 2. Recesso.",
+        )
+        .unwrap();
+
+        let view = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "paragrafo",
+            "1",
+            "Articolo 1. Il conduttore è tenuto.",
+            Some("passaggio rilevante"),
+        )
+        .unwrap();
+
+        assert_eq!(view.excerpts.len(), 1);
+        let e = &view.excerpts[0];
+        assert_eq!(e.quote(), "Articolo 1. Il conduttore è tenuto.");
+        assert_eq!(e.anchor().kind, "paragrafo");
+        assert_eq!(e.anchor().value, "1");
+        // Created on the same path as a manual Estratto: auto-pinned to the blob.
+        assert_eq!(e.source_sha256().map(|s| s.to_string()), Some(sha));
+        // Persisted.
+        assert_eq!(open(ws.path(), "m").unwrap().excerpts.len(), 1);
+    }
+
+    #[test]
+    fn accept_candidate_with_absent_quote_is_rejected_and_writes_nothing() {
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Articolo 1. Il conduttore è tenuto.",
+        )
+        .unwrap();
+
+        let r = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "paragrafo",
+            "1",
+            "Il locatore rinuncia a ogni pretesa.", // not in the text layer
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        // No Estratto persisted.
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn accept_candidate_matches_under_whitespace_normalization() {
+        let (ws, files, sid, sha) = seed_with_document();
+        // Text layer with PDF-style spacing/newlines.
+        set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Articolo 1.\nIl   conduttore\nè tenuto.",
+        )
+        .unwrap();
+
+        let view = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "paragrafo",
+            "1",
+            "Il conduttore è tenuto.",
+            None,
+        )
+        .unwrap();
+        assert_eq!(view.excerpts.len(), 1);
+    }
+
+    #[test]
+    fn accept_candidate_without_text_layer_is_rejected() {
+        // No set_source_text → text layer Absent → cannot accept anything.
+        let (ws, files, sid, _sha) = seed_with_document();
+        let r = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            "paragrafo",
+            "1",
+            "qualunque cosa",
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn accept_candidate_on_unknown_source_is_rejected() {
+        let (ws, files, _sid, _sha) = seed_with_document();
+        let r = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "m",
+            "ghost",
+            "paragrafo",
+            "1",
+            "x",
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+        assert!(open(ws.path(), "m").unwrap().excerpts.is_empty());
+    }
+
+    #[test]
+    fn accept_candidate_on_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        let r = accept_evidence_candidate(
+            ws.path(),
+            files.path(),
+            "nope",
+            "s1",
+            "paragrafo",
+            "1",
+            "x",
+            None,
+        );
+        assert!(matches!(r, Err(StoreError::NotFound(_))));
     }
 }

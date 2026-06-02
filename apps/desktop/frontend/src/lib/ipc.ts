@@ -171,6 +171,50 @@ export function getSourceText(matterId: string, sourceId: string): Promise<Sourc
   return invoke<SourceText>("get_source_text", { matterId, sourceId });
 }
 
+// --- #55 AI Evidence Assistant V1A -----------------------------------------
+
+/** A proposed Estratto (not persisted). Mirrors `quaero_core::evidence`'s
+ *  `EvidenceCandidate`. The lawyer approves/edits/discards it; only on approval
+ *  does it become a real Estratto (with the quote verified against the text
+ *  layer, server-side). */
+export interface EvidenceCandidate {
+  quote: string;
+  anchorKind: string;
+  anchorValue: string;
+  reason: string;
+}
+
+/** Propose Evidence candidates for a Documento source from its local text layer
+ *  (#52). Offline Stub provider (V1A): no LLM, no network, no auto-save. Returns
+ *  an empty list when the source has no available text layer. */
+export function proposeEvidence(
+  matterId: string,
+  sourceId: string,
+): Promise<EvidenceCandidate[]> {
+  return invoke<EvidenceCandidate[]>("propose_evidence", { matterId, sourceId });
+}
+
+/** Turn an approved candidate into a real Estratto (#55). The backend verifies,
+ *  under the per-matter lock, that the `quote` occurs in the source's text layer;
+ *  otherwise it refuses with no write. Returns the updated view. */
+export function acceptEvidenceCandidate(
+  matterId: string,
+  sourceId: string,
+  anchorKind: string,
+  anchorValue: string,
+  quote: string,
+  note?: string,
+): Promise<WorkspaceView> {
+  return invoke<WorkspaceView>("accept_evidence_candidate", {
+    matterId,
+    sourceId,
+    anchorKind,
+    anchorValue,
+    quote,
+    note: note ?? null,
+  });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */
