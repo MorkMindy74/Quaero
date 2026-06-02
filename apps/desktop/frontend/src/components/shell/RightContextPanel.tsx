@@ -7,7 +7,7 @@ import { NewCitationDialog } from "./NewCitationDialog";
 import { SourceTextPanel } from "./SourceTextPanel";
 import { EvidenceCandidatesPanel } from "./EvidenceCandidatesPanel";
 import { nextActionKey } from "../../lib/pilot";
-import type { SourceText, EvidenceCandidate } from "../../lib/ipc";
+import type { SourceText, EvidenceCandidate, LocalEvidenceResult } from "../../lib/ipc";
 import {
   workspaceView,
   reasoningSteps,
@@ -352,6 +352,8 @@ function SourcesTab({
   onSetSourceText,
   onProposeEvidence,
   onAcceptEvidence,
+  evidenceLocalEnabled,
+  onProposeEvidenceLocal,
 }: {
   view: WorkspaceView;
   selected: string | null;
@@ -375,6 +377,11 @@ function SourcesTab({
     quote: string,
     note?: string,
   ) => Promise<boolean>;
+  evidenceLocalEnabled?: boolean;
+  onProposeEvidenceLocal?: (
+    matterId: string,
+    sourceId: string,
+  ) => Promise<LocalEvidenceResult>;
 }) {
   const { t } = useTranslation();
   const { client, matter, sources, dossiers } = view;
@@ -387,7 +394,7 @@ function SourcesTab({
   const isSelectedDocument =
     !!matterId && selectedSource?.kind === "Documento" && !!selectedSource.file;
   const showTextLayer = isSelectedDocument && !!onGetSourceText && !!onSetSourceText;
-  // Evidence Assistant (#55): same gating; proposes candidate Estratti.
+  // Evidence Assistant (#55 V1A + #58 V1B): same gating; proposes candidate Estratti.
   const showEvidence = isSelectedDocument && !!onProposeEvidence && !!onAcceptEvidence;
 
   return (
@@ -437,7 +444,9 @@ function SourcesTab({
           key={`evidence:${matterId}:${selectedSource.id}`}
           matterId={matterId}
           source={selectedSource}
+          localEnabled={evidenceLocalEnabled}
           onPropose={onProposeEvidence}
+          onProposeLocal={onProposeEvidenceLocal}
           onAccept={onAcceptEvidence}
         />
       )}
@@ -553,6 +562,8 @@ export function RightContextPanel({
   onSetSourceText,
   onProposeEvidence,
   onAcceptEvidence,
+  evidenceLocalEnabled,
+  onProposeEvidenceLocal,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -589,6 +600,11 @@ export function RightContextPanel({
     quote: string,
     note?: string,
   ) => Promise<boolean>;
+  evidenceLocalEnabled?: boolean;
+  onProposeEvidenceLocal?: (
+    matterId: string,
+    sourceId: string,
+  ) => Promise<LocalEvidenceResult>;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -651,6 +667,8 @@ export function RightContextPanel({
             onSetSourceText={onSetSourceText}
             onProposeEvidence={onProposeEvidence}
             onAcceptEvidence={onAcceptEvidence}
+            evidenceLocalEnabled={evidenceLocalEnabled}
+            onProposeEvidenceLocal={onProposeEvidenceLocal}
           />
         )}
         {tab === "excerpts" && (

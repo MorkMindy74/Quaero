@@ -22,7 +22,11 @@ import {
   setSourceText,
   proposeEvidence,
   acceptEvidenceCandidate,
+  proposeEvidenceLocal,
+  requestEvidenceConsent,
+  evidenceProviderKind,
 } from "../../lib/ipc";
+import type { LocalEvidenceResult } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
 
@@ -46,6 +50,8 @@ export default function AppShell() {
   const [addExcerptError, setAddExcerptError] = useState<string | null>(null);
   const [addCitationError, setAddCitationError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  // #58: is the local Ollama Evidence provider opted-in AND loopback-valid?
+  const [evidenceLocalEnabled, setEvidenceLocalEnabled] = useState(false);
 
   const openById = async (id: string) => {
     setOpenError(null);
@@ -175,6 +181,17 @@ export default function AppShell() {
     }
   };
 
+  // #58: the panel signals consent (after its dialog); the backend issues a
+  // one-shot, source-bound token which the local proposal then consumes. The
+  // token never lives in the panel.
+  const handleProposeEvidenceLocal = async (
+    matterId: string,
+    sourceId: string,
+  ): Promise<LocalEvidenceResult> => {
+    const token = await requestEvidenceConsent(matterId, sourceId);
+    return proposeEvidenceLocal(matterId, sourceId, token);
+  };
+
   const handleExportMarkdown = async (): Promise<boolean> => {
     setExportError(null);
     if (!open) return false;
@@ -196,6 +213,13 @@ export default function AppShell() {
       return false;
     }
   };
+
+  useEffect(() => {
+    // Reflect the backend's honest provider posture (opt-in + loopback check).
+    evidenceProviderKind()
+      .then((kind) => setEvidenceLocalEnabled(kind === "ollamaLocal"))
+      .catch(() => setEvidenceLocalEnabled(false));
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -241,6 +265,8 @@ export default function AppShell() {
           onSetSourceText={open ? setSourceText : undefined}
           onProposeEvidence={open ? proposeEvidence : undefined}
           onAcceptEvidence={open ? handleAcceptEvidence : undefined}
+          evidenceLocalEnabled={evidenceLocalEnabled}
+          onProposeEvidenceLocal={open ? handleProposeEvidenceLocal : undefined}
         />
       </div>
       <StatusStrip />

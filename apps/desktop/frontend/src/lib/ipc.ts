@@ -194,6 +194,50 @@ export function proposeEvidence(
   return invoke<EvidenceCandidate[]>("propose_evidence", { matterId, sourceId });
 }
 
+/** A candidate from the LOCAL model (#58, V1B), scored against the text layer.
+ *  `valid=false` means the model proposed a quote not present in the document —
+ *  shown but never approvable. */
+export interface ScoredEvidenceCandidate extends EvidenceCandidate {
+  valid: boolean;
+}
+
+/** Result of a local-model proposal, with the explicit truncation notice. */
+export interface LocalEvidenceResult {
+  candidates: ScoredEvidenceCandidate[];
+  truncated: boolean;
+  analyzedChars: number;
+}
+
+/** Which Evidence provider is active: "stub" (offline) | "ollamaLocal". Used to
+ *  gate the "propose with local model" action. Config flag only, no client data. */
+export function evidenceProviderKind(): Promise<string> {
+  return invoke<string>("evidence_provider_kind");
+}
+
+/** Issue a one-shot consent token (#58) after the lawyer confirms the dialog.
+ *  Bound by the backend to (matterId, sourceId, sha256), short-lived, single-use.
+ *  No text is read or sent here. */
+export function requestEvidenceConsent(matterId: string, sourceId: string): Promise<string> {
+  return invoke<string>("request_evidence_consent", { matterId, sourceId });
+}
+
+/** Propose Evidence candidates via the LOCAL Ollama model (#58, V1B). Requires a
+ *  valid one-shot `consentToken` (from `requestEvidenceConsent`) AND the opt-in
+ *  env — the backend consumes the token before any send. The document text layer
+ *  is sent only to a loopback model, via the Privacy Guard. Candidates are NOT
+ *  persisted; each carries a `valid` flag. */
+export function proposeEvidenceLocal(
+  matterId: string,
+  sourceId: string,
+  consentToken: string,
+): Promise<LocalEvidenceResult> {
+  return invoke<LocalEvidenceResult>("propose_evidence_local", {
+    matterId,
+    sourceId,
+    consentToken,
+  });
+}
+
 /** Turn an approved candidate into a real Estratto (#55). The backend verifies,
  *  under the per-matter lock, that the `quote` occurs in the source's text layer;
  *  otherwise it refuses with no write. Returns the updated view. */
