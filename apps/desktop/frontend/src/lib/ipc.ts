@@ -153,13 +153,17 @@ export interface SourceText {
 
 /** Persist a derived text layer for a Documento source (#52). The text is
  *  produced in the renderer (UTF-8 for .txt/.md, pdf.js for PDF); the backend
- *  never parses the document — it writes a local sidecar. */
+ *  never parses the document — it writes a local sidecar. `expectedSha256` is
+ *  captured at extraction start and verified by the backend (under the per-matter
+ *  lock) against the source's pinned digest, so the text can never be persisted
+ *  against the wrong version/Fonte. */
 export function setSourceText(
   matterId: string,
   sourceId: string,
+  expectedSha256: string,
   text: string,
 ): Promise<SourceText> {
-  return invoke<SourceText>("set_source_text", { matterId, sourceId, text });
+  return invoke<SourceText>("set_source_text", { matterId, sourceId, expectedSha256, text });
 }
 
 /** Read the derived text layer of a Documento source (#52). Read-only. */

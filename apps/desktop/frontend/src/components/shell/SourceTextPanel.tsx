@@ -26,13 +26,20 @@ const PREVIEW_CAP = 20_000;
  *  imported blob), and previews it read-only. Extraction runs entirely in the
  *  renderer; the store only persists the derived text. No egress, no LLM. */
 export function SourceTextPanel({
+  matterId,
   source,
   onGet,
   onSet,
 }: {
+  matterId: string;
   source: SourceRef;
-  onGet: (sourceId: string) => Promise<SourceText>;
-  onSet: (sourceId: string, text: string) => Promise<SourceText>;
+  onGet: (matterId: string, sourceId: string) => Promise<SourceText>;
+  onSet: (
+    matterId: string,
+    sourceId: string,
+    expectedSha256: string,
+    text: string,
+  ) => Promise<SourceText>;
 }) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<UiStatus>("loading");
@@ -59,40 +66,49 @@ export function SourceTextPanel({
       return;
     }
     setStatus("loading");
-    onGet(source.id)
+    onGet(matterId, source.id)
       .then((res) => {
         if (!alive) return;
         setStatus(res.status);
         setText(res.text ?? "");
       })
       .catch(() => {
-        if (alive) setStatus("absent");
+        // The store fails closed on a corrupt/hostile/oversize sidecar; surface
+        // that as "failed" (not "absent", which means "not extracted yet").
+        if (alive) setStatus("failed");
       });
     return () => {
       alive = false;
     };
-  }, [source.id, source.file, fmt, onGet]);
+  }, [matterId, source.id, source.file, fmt, onGet]);
 
   const onPick = async (file: File) => {
     if (!source.file) return;
+    // Capture the target (matter, source, expected digest, name) at extraction
+    // START — never re-read live state at commit time, so switching Pratica/Fonte
+    // mid-extraction cannot misroute the write.
+    const mid = matterId;
+    const sid = source.id;
+    const expectedSha = source.file.sha256;
+    const name = source.file.originalName;
     setError(null);
     setBusy(true);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // Coherence: the re-picked file must be the imported one (same digest),
-      // so the stored text is always derived from the pinned blob version.
+      // Coherence (renderer-side fast check): the re-picked file must be the
+      // imported one (same digest). The backend re-verifies expectedSha too.
       const digest = await sha256Hex(bytes);
-      if (digest !== source.file.sha256) {
+      if (digest !== expectedSha) {
         setError(t("textLayer.shaMismatch"));
         return;
       }
-      const outcome = await extractDocumentText(source.file.originalName, bytes);
+      const outcome = await extractDocumentText(name, bytes);
       if (outcome.kind === "unsupported") {
         setStatus("unsupported");
       } else if (outcome.kind === "failed") {
         setStatus("failed");
       } else {
-        const res = await onSet(source.id, outcome.text);
+        const res = await onSet(mid, sid, expectedSha, outcome.text);
         setStatus(res.status);
         setText(res.text ?? "");
         setPreviewOpen(res.status === "available");

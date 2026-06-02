@@ -346,6 +346,7 @@ function SourcesTab({
   onSelect,
   onImportFile,
   importError,
+  matterId,
   onGetSourceText,
   onSetSourceText,
 }: {
@@ -354,8 +355,14 @@ function SourcesTab({
   onSelect: (id: string) => void;
   onImportFile?: (file: File) => void;
   importError?: string | null;
-  onGetSourceText?: (sourceId: string) => Promise<SourceText>;
-  onSetSourceText?: (sourceId: string, text: string) => Promise<SourceText>;
+  matterId?: string;
+  onGetSourceText?: (matterId: string, sourceId: string) => Promise<SourceText>;
+  onSetSourceText?: (
+    matterId: string,
+    sourceId: string,
+    expectedSha256: string,
+    text: string,
+  ) => Promise<SourceText>;
 }) {
   const { t } = useTranslation();
   const { client, matter, sources, dossiers } = view;
@@ -366,6 +373,7 @@ function SourcesTab({
   // gets a text-layer panel (extract/preview). Shown once (not per dossier).
   const selectedSource = selected ? findSource(selected) : undefined;
   const showTextLayer =
+    !!matterId &&
     !!onGetSourceText &&
     !!onSetSourceText &&
     selectedSource?.kind === "Documento" &&
@@ -400,8 +408,9 @@ function SourcesTab({
         </div>
       )}
 
-      {showTextLayer && selectedSource && onGetSourceText && onSetSourceText && (
+      {showTextLayer && selectedSource && matterId && onGetSourceText && onSetSourceText && (
         <SourceTextPanel
+          matterId={matterId}
           source={selectedSource}
           onGet={onGetSourceText}
           onSet={onSetSourceText}
@@ -537,8 +546,13 @@ export function RightContextPanel({
   onDeleteExcerpt?: (excerptId: string) => Promise<boolean>;
   onUpdateCitation?: (citationId: string, claim: string) => Promise<boolean>;
   onDeleteCitation?: (citationId: string) => Promise<boolean>;
-  onGetSourceText?: (sourceId: string) => Promise<SourceText>;
-  onSetSourceText?: (sourceId: string, text: string) => Promise<SourceText>;
+  onGetSourceText?: (matterId: string, sourceId: string) => Promise<SourceText>;
+  onSetSourceText?: (
+    matterId: string,
+    sourceId: string,
+    expectedSha256: string,
+    text: string,
+  ) => Promise<SourceText>;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -596,6 +610,7 @@ export function RightContextPanel({
             onSelect={setSelected}
             onImportFile={onImportFile}
             importError={importError}
+            matterId={workspace?.matter.id}
             onGetSourceText={onGetSourceText}
             onSetSourceText={onSetSourceText}
           />

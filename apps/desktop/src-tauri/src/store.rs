@@ -1028,14 +1028,23 @@ fn classify_text(text: &str) -> SourceText {
 /// sits next to the immutable blob, so it is structurally bound to that version
 /// (the `sha256`-pinned bytes are never overwritten).
 ///
+/// Coherence is **backend-enforced**: the caller passes the `expected_sha256` it
+/// captured at extraction start, and the store verifies it (under the per-matter
+/// lock) against the loaded `SourceRef.file.sha256` before writing. So even if
+/// the renderer switches Pratica/Fonte mid-extraction (source ids are only
+/// workspace-local), a write whose digest does not match the target source is
+/// refused — the text layer can never be misassociated with the wrong version.
+///
 /// Errors: unknown matter (`NotFound`); unknown or file-less source (`Domain`);
-/// hostile stored name (`Corrupt` at load / `Domain` here); text over the cap
-/// (`TooLarge`). Nothing partial is ever left on failure.
+/// digest mismatch (`EvidenceIntegrity`); hostile stored name (`Corrupt` at load
+/// / `Domain` here); text over the cap (`TooLarge`). Nothing partial is ever
+/// left on failure.
 pub fn set_source_text(
     base: &Path,
     files_dir: &Path,
     matter_id: &str,
     source_id: &str,
+    expected_sha256: &str,
     text: &str,
 ) -> Result<SourceText, StoreError> {
     // Bound the sidecar before touching disk or the lock.
@@ -1066,6 +1075,17 @@ pub fn set_source_text(
         .file
         .as_ref()
         .ok_or_else(|| StoreError::Domain(format!("source {source_id} has no file")))?;
+
+    // Backend-enforced coherence: the text must be derived from the exact pinned
+    // version the caller saw. Reject any write whose expected digest disagrees
+    // with the loaded source (closes cross-Pratica/Fonte misassociation, since
+    // source ids are only workspace-local). Nothing is written on mismatch.
+    if file.sha256 != expected_sha256 {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "expected sha256 does not match the stored source".to_string(),
+        });
+    }
 
     // Defence-in-depth: `load_consistent` already rejects unsafe stored names,
     // but never build a path from one without re-checking.
@@ -2425,22 +2445,31 @@ mod tests {
 
     // ----- #52 Text Layer Import -----
 
-    /// Seed a Pratica "m" with one imported Documento, returning (ws, files, sid).
-    fn seed_with_document() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    /// Seed a Pratica "m" with one imported Documento, returning
+    /// (ws, files, sid, sha256) — the digest is the `expected_sha256` callers pass.
+    fn seed_with_document() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
         let ws = tempdir().unwrap();
         let files = tempdir().unwrap();
         create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
         let view =
             import_document(ws.path(), files.path(), "m", "contratto.pdf", b"%PDF-bytes").unwrap();
         let sid = view.sources[0].id.0.clone();
-        (ws, files, sid)
+        let sha = view.sources[0].file.as_ref().unwrap().sha256.clone();
+        (ws, files, sid, sha)
     }
 
     #[test]
     fn set_then_get_text_layer_round_trips_available() {
-        let (ws, files, sid) = seed_with_document();
-        let set =
-            set_source_text(ws.path(), files.path(), "m", &sid, "Articolo 1. Testo.").unwrap();
+        let (ws, files, sid, sha) = seed_with_document();
+        let set = set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Articolo 1. Testo.",
+        )
+        .unwrap();
         assert_eq!(set.status, SourceTextStatus::Available);
 
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
@@ -2460,8 +2489,24 @@ mod tests {
     }
 
     #[test]
+    fn set_text_layer_rejects_wrong_expected_sha_and_writes_nothing() {
+        // Backend-enforced coherence: a digest that does not match the loaded
+        // source is refused (closes cross-Pratica/Fonte misassociation).
+        let (ws, files, sid, _sha) = seed_with_document();
+        let r = set_source_text(ws.path(), files.path(), "m", &sid, &"b".repeat(64), "x");
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        // nothing persisted
+        assert_eq!(
+            get_source_text(ws.path(), files.path(), "m", &sid)
+                .unwrap()
+                .status,
+            SourceTextStatus::Absent
+        );
+    }
+
+    #[test]
     fn empty_text_persists_empty_state_distinct_from_absent() {
-        let (ws, files, sid) = seed_with_document();
+        let (ws, files, sid, sha) = seed_with_document();
         // before extraction → Absent
         assert_eq!(
             get_source_text(ws.path(), files.path(), "m", &sid)
@@ -2470,7 +2515,7 @@ mod tests {
             SourceTextStatus::Absent
         );
         // whitespace-only extraction (e.g. scanned PDF) → Empty, persisted
-        let set = set_source_text(ws.path(), files.path(), "m", &sid, "   \n\t").unwrap();
+        let set = set_source_text(ws.path(), files.path(), "m", &sid, &sha, "   \n\t").unwrap();
         assert_eq!(set.status, SourceTextStatus::Empty);
         assert!(set.text.is_none());
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
@@ -2480,7 +2525,7 @@ mod tests {
 
     #[test]
     fn get_text_layer_absent_when_no_sidecar() {
-        let (ws, files, sid) = seed_with_document();
+        let (ws, files, sid, _sha) = seed_with_document();
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
         assert_eq!(got.status, SourceTextStatus::Absent);
         assert!(got.text.is_none());
@@ -2488,9 +2533,9 @@ mod tests {
 
     #[test]
     fn set_text_layer_rejects_oversize_and_writes_nothing() {
-        let (ws, files, sid) = seed_with_document();
+        let (ws, files, sid, sha) = seed_with_document();
         let big = "a".repeat((MAX_TEXT_BYTES + 1) as usize);
-        let r = set_source_text(ws.path(), files.path(), "m", &sid, &big);
+        let r = set_source_text(ws.path(), files.path(), "m", &sid, &sha, &big);
         assert!(matches!(r, Err(StoreError::TooLarge { .. })));
         // no sidecar written
         assert_eq!(
@@ -2503,8 +2548,8 @@ mod tests {
 
     #[test]
     fn set_text_layer_on_unknown_source_is_rejected() {
-        let (ws, files, _sid) = seed_with_document();
-        let r = set_source_text(ws.path(), files.path(), "m", "ghost", "x");
+        let (ws, files, _sid, _sha) = seed_with_document();
+        let r = set_source_text(ws.path(), files.path(), "m", "ghost", &"a".repeat(64), "x");
         assert!(matches!(r, Err(StoreError::Domain(_))));
     }
 
@@ -2513,7 +2558,7 @@ mod tests {
         let ws = tempdir().unwrap();
         let files = tempdir().unwrap();
         assert!(matches!(
-            set_source_text(ws.path(), files.path(), "nope", "s1", "x"),
+            set_source_text(ws.path(), files.path(), "nope", "s1", &"a".repeat(64), "x"),
             Err(StoreError::NotFound(_))
         ));
         assert!(matches!(
@@ -2545,7 +2590,7 @@ mod tests {
         update(dir.path(), &ws).unwrap();
 
         assert!(matches!(
-            set_source_text(dir.path(), files.path(), "m", "ref-1", "x"),
+            set_source_text(dir.path(), files.path(), "m", "ref-1", &"a".repeat(64), "x"),
             Err(StoreError::Domain(_))
         ));
         assert_eq!(
@@ -2560,8 +2605,16 @@ mod tests {
     fn text_layer_survives_reopen_and_is_coherent_with_blob() {
         // The text layer is bound to the immutable blob: re-importing/reopening
         // keeps it readable and coherent (blob never overwritten).
-        let (ws, files, sid) = seed_with_document();
-        set_source_text(ws.path(), files.path(), "m", &sid, "Testo persistito.").unwrap();
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Testo persistito.",
+        )
+        .unwrap();
         // simulate reopen by going through open() then get_source_text again
         let reopened = open(ws.path(), "m").unwrap();
         let sid2 = reopened.sources[0].id.0.clone();
@@ -2573,7 +2626,7 @@ mod tests {
     #[test]
     fn pre_slice_workspace_has_absent_text_layer() {
         // Retro-compat: a Pratica imported before this slice has no sidecar.
-        let (ws, files, sid) = seed_with_document();
+        let (ws, files, sid, _sha) = seed_with_document();
         // never call set_source_text → behaves exactly like an old workspace
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
         assert_eq!(got.status, SourceTextStatus::Absent);
@@ -2587,7 +2640,7 @@ mod tests {
         let files = tempdir().unwrap();
         plant_workspace_with_stored_name(dir.path(), "../../evil.bin");
         assert!(matches!(
-            set_source_text(dir.path(), files.path(), "m", "s1", "x"),
+            set_source_text(dir.path(), files.path(), "m", "s1", &"ab".repeat(32), "x"),
             Err(StoreError::Corrupt { .. })
         ));
         assert!(matches!(
@@ -2598,7 +2651,7 @@ mod tests {
 
     #[test]
     fn get_text_layer_rejects_non_regular_sidecar() {
-        let (ws, files, sid) = seed_with_document();
+        let (ws, files, sid, _sha) = seed_with_document();
         let stored = open(ws.path(), "m").unwrap().sources[0]
             .file
             .as_ref()
@@ -2617,9 +2670,9 @@ mod tests {
 
     #[test]
     fn set_text_layer_overwrites_previous_extraction() {
-        let (ws, files, sid) = seed_with_document();
-        set_source_text(ws.path(), files.path(), "m", &sid, "prima").unwrap();
-        set_source_text(ws.path(), files.path(), "m", &sid, "seconda").unwrap();
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(ws.path(), files.path(), "m", &sid, &sha, "prima").unwrap();
+        set_source_text(ws.path(), files.path(), "m", &sid, &sha, "seconda").unwrap();
         let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
         assert_eq!(got.text.as_deref(), Some("seconda"));
     }

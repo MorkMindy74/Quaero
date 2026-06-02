@@ -44,11 +44,15 @@ afterEach(() => vi.clearAllMocks());
 function renderPanel(opts: {
   source: SourceRef;
   get: () => Promise<SourceText>;
-  set?: (id: string, text: string) => Promise<SourceText>;
+  set?: () => Promise<SourceText>;
 }) {
-  const onSet = vi.fn(opts.set ?? (async () => ({ status: "available", text: "" }) as SourceText));
-  render(<SourceTextPanel source={opts.source} onGet={vi.fn(opts.get)} onSet={onSet} />);
-  return { onSet };
+  const onGet = vi.fn(async (_mid: string, _sid: string) => opts.get());
+  const onSet = vi.fn(
+    async (_mid: string, _sid: string, _sha: string, _text: string) =>
+      (opts.set ? opts.set() : ({ status: "available", text: "" } as SourceText)),
+  );
+  render(<SourceTextPanel matterId="m" source={opts.source} onGet={onGet} onSet={onSet} />);
+  return { onGet, onSet };
 }
 
 test("renders the persisted 'available' state and toggles a read-only preview", async () => {
@@ -70,11 +74,21 @@ test("renders 'empty' state (supported file, no useful text)", async () => {
 });
 
 test("derives 'unsupported' from the filename without querying the store", async () => {
-  const get = vi.fn(async () => ({ status: "absent" }) as SourceText);
-  render(<SourceTextPanel source={doc("atto.docx")} onGet={get} onSet={vi.fn()} />);
+  const get = vi.fn(async (_mid: string, _sid: string) => ({ status: "absent" }) as SourceText);
+  render(<SourceTextPanel matterId="m" source={doc("atto.docx")} onGet={get} onSet={vi.fn()} />);
   expect(await screen.findByTestId("text-layer-status")).toHaveTextContent("Formato non supportato");
   expect(get).not.toHaveBeenCalled();
   expect(screen.queryByLabelText("Estrai testo")).not.toBeInTheDocument();
+});
+
+test("a corrupt sidecar (store error) shows 'failed', not 'absent'", async () => {
+  renderPanel({
+    source: doc("c.pdf"),
+    get: async () => {
+      throw new Error("corrupt sidecar");
+    },
+  });
+  expect(await screen.findByTestId("text-layer-status")).toHaveTextContent("Estrazione fallita");
 });
 
 test("extracting a matching file stores the text and shows 'available'", async () => {
@@ -92,7 +106,7 @@ test("extracting a matching file stores the text and shows 'available'", async (
   await waitFor(() =>
     expect(screen.getByTestId("text-layer-status")).toHaveTextContent("Testo disponibile"),
   );
-  expect(onSet).toHaveBeenCalledWith("s1", "estratto ok");
+  expect(onSet).toHaveBeenCalledWith("m", "s1", SHA, "estratto ok");
 });
 
 test("a file whose sha256 differs from the original is refused, nothing stored", async () => {

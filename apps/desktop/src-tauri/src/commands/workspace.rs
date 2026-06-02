@@ -124,12 +124,20 @@ pub fn set_source_text(
     app: AppHandle,
     matter_id: String,
     source_id: String,
+    expected_sha256: String,
     text: String,
 ) -> Result<SourceText, String> {
     let ws_dir = workspaces_dir(&app)?;
     let blob_dir = files_dir(&app)?;
-    store::set_source_text(&ws_dir, &blob_dir, &matter_id, &source_id, &text)
-        .map_err(|e| e.to_string())
+    store::set_source_text(
+        &ws_dir,
+        &blob_dir,
+        &matter_id,
+        &source_id,
+        &expected_sha256,
+        &text,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// IPC: read the derived text layer of a Documento source (#52). Read-only.
