@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::local_model::{
-    build_local_client, map_send_error, map_status_error, validate_local_endpoint,
+    build_local_client, map_send_error, map_status_error, read_bounded, validate_local_endpoint,
 };
 
 const DEFAULT_URL: &str = "http://127.0.0.1:11434";
@@ -92,10 +92,12 @@ impl OllamaLocalProvider {
         if !resp.status().is_success() {
             return Err(map_status_error(resp.status().as_u16()));
         }
-        let parsed: OllamaChatResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("risposta del modello non valida: {e}"))?;
+        // Bounded read BEFORE parsing (same fail-closed posture as Evidence): an
+        // untrusted local server cannot force an unbounded buffer/deserialize.
+        let body = read_bounded(resp).await?;
+        // Generic parse error — never echo the raw model output.
+        let parsed: OllamaChatResponse = serde_json::from_slice(&body)
+            .map_err(|_| "risposta del modello non valida".to_string())?;
         Ok(ChatReply {
             reply: extract_reply(parsed)?,
             grounded: false,
@@ -338,6 +340,49 @@ mod tests {
             model: "qwen3".to_string(),
         };
         assert!(!remote.endpoint_is_local());
+    }
+
+    /// Fail-closed resource guard (parity with Evidence): a local server
+    /// returning an oversized body is rejected via the shared bounded read BEFORE
+    /// any JSON parsing, with a generic error that carries no content.
+    #[test]
+    fn oversized_chat_response_is_rejected_fail_closed() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut s, peer)) = listener.accept() {
+                assert!(peer.ip().is_loopback());
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let big = "a".repeat(crate::local_model::MAX_RESPONSE_BYTES + 4096);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{big}",
+                    big.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+
+        let provider = OllamaLocalProvider {
+            base_url: format!("http://127.0.0.1:{port}"),
+            model: "qwen3".to_string(),
+        };
+        let request = ChatRequest {
+            prompt: "PROMPT_RISERVATO_marcatore".to_string(),
+        };
+        let err = tauri::async_runtime::block_on(provider.respond(&request)).unwrap_err();
+        handle.join().ok();
+        assert!(
+            err.contains("troppo grande"),
+            "expected oversize error, got: {err}"
+        );
+        // The error must not leak the prompt/content.
+        assert!(!err.contains("PROMPT_RISERVATO_marcatore"));
     }
 
     #[test]

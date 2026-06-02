@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::local_model::{
-    build_local_client, map_send_error, map_status_error, validate_local_endpoint,
+    build_local_client, map_send_error, map_status_error, read_bounded, validate_local_endpoint,
 };
 
 const DEFAULT_URL: &str = "http://127.0.0.1:11434";
@@ -34,11 +34,6 @@ const TIMEOUT_SECS: u64 = 120;
 /// Conservative window of the text layer sent to the local model (chars). Longer
 /// documents are truncated with an explicit notice (no silent drop, no chunking).
 pub const MAX_MODEL_INPUT_CHARS: usize = 12_000;
-
-/// Hard cap on the model's HTTP response body (bytes), read in a bounded loop
-/// BEFORE any JSON parsing — a broken/injected local model cannot force the app
-/// to buffer/deserialize an unbounded body (fail-closed resource guard).
-const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
 /// Per-field caps + candidate count, enforced on the model's (untrusted) JSON.
 const QUOTE_MAX: usize = 2_000;
@@ -164,20 +159,6 @@ fn parse_candidates(content: &str) -> Result<Vec<EvidenceCandidate>, String> {
         });
     }
     Ok(out)
-}
-
-/// Read an HTTP response body in a bounded loop, failing closed if it exceeds
-/// [`MAX_RESPONSE_BYTES`]. Never buffers/parses an unbounded body. The error is
-/// generic (no content).
-async fn read_bounded(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(map_send_error)? {
-        if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("risposta del modello troppo grande (oltre il limite)".to_string());
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf)
 }
 
 /// Local Ollama Evidence provider. Endpoint/model from env, localhost defaults.
@@ -389,7 +370,7 @@ mod tests {
                 assert!(peer.ip().is_loopback());
                 let mut buf = [0u8; 1024];
                 let _ = s.read(&mut buf);
-                let big = "a".repeat(MAX_RESPONSE_BYTES + 4096);
+                let big = "a".repeat(crate::local_model::MAX_RESPONSE_BYTES + 4096);
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{big}",

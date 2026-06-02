@@ -14,6 +14,26 @@
 
 use std::time::Duration;
 
+/// Hard cap on a local model's HTTP response body (bytes), read in a bounded loop
+/// BEFORE any JSON parsing — a broken/untrusted local model cannot force the app
+/// to buffer/deserialize an unbounded body (fail-closed resource guard). Shared by
+/// the chat and Evidence providers so the whole Ollama boundary is symmetric.
+pub const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
+
+/// Read an HTTP response body in a bounded loop, failing closed if it exceeds
+/// [`MAX_RESPONSE_BYTES`]. Never buffers/parses an unbounded body. The error is
+/// generic (no content).
+pub async fn read_bounded(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(map_send_error)? {
+        if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err("risposta del modello troppo grande (oltre il limite)".to_string());
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 /// Build the hardened local-only HTTP client shared by all on-device providers.
 /// Redirects disabled + system/env proxies disabled + a request timeout.
 pub fn build_local_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
