@@ -7,6 +7,8 @@ import { DraftDocument } from "../workspace/DraftDocument";
 import { DraftMetaRail } from "../workspace/DraftMetaRail";
 import { ChatPanel } from "./ChatPanel";
 import { WorkflowGuide, type GuideTab } from "./WorkflowGuide";
+import { Badge } from "../ui";
+import { reviewRows, type ReviewEsito } from "../../lib/review";
 import { reasoningSteps, genealogyNodes, type MockMatter } from "../../mock/data";
 import type { WorkspaceView } from "../../domain/types";
 
@@ -34,8 +36,12 @@ export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWo
             {workspace.client.name}
             {workspace.matter.subject ? ` · ${workspace.matter.subject}` : ""}
           </p>
+          <div className="mt-3">
+            <ModeSwitcher active={mode} onChange={setMode} />
+          </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-6">
+        <div className="min-h-0 flex-1 space-y-6 overflow-auto p-6">
+          {/* The guided "next action" stays as the orientation hero (#62). */}
           <WorkflowGuide
             sources={workspace.sources?.length ?? 0}
             excerpts={workspace.excerpts?.length ?? 0}
@@ -44,6 +50,8 @@ export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWo
             onGoToTab={(tab: GuideTab) => onGoToTab?.(tab)}
             onExport={() => onExport?.() ?? Promise.resolve(false)}
           />
+          {/* The workbench: each mode bound to the REAL Pratica (#64). */}
+          <RealModeSurface mode={mode} workspace={workspace} />
         </div>
       </main>
     );
@@ -116,4 +124,111 @@ function ModeSurface({ mode, matterId }: { mode: ModeId; matterId: string }) {
   // `key` scopes the chat to the active matter: switching Pratica remounts the
   // panel and clears its in-memory history → no cross-matter/client bleed (#7).
   return <ChatPanel key={matterId} />;
+}
+
+// #64 Cantiere reale: the operational modes for the REAL open Pratica. Surfaces
+// are bound to real data where it exists (Conversazione, Revisione) and show an
+// HONEST empty-state where it does not yet (Ragionamento, Genealogia, Redazione).
+// No mock data, no invented data.
+function RealModeSurface({ mode, workspace }: { mode: ModeId; workspace: WorkspaceView }) {
+  const { t } = useTranslation();
+
+  if (mode === "review") {
+    return <ReviewSurface workspace={workspace} />;
+  }
+  if (mode === "reasoning") {
+    return (
+      <div data-testid="surface-reasoning">
+        <EmptyMode title={t("modes.reasoning")} body={t("workspace.reasoningEmpty")} />
+      </div>
+    );
+  }
+  if (mode === "genealogy") {
+    return (
+      <div data-testid="surface-genealogy">
+        <EmptyMode title={t("modes.genealogy")} body={t("workspace.genealogyEmpty")} />
+      </div>
+    );
+  }
+  if (mode === "drafting") {
+    return (
+      <div data-testid="surface-drafting">
+        <EmptyMode title={t("modes.drafting")} body={t("workspace.draftingEmpty")} />
+      </div>
+    );
+  }
+  // conversation (default): the real, matter-scoped exploratory chat (#7).
+  return (
+    <div className="h-[420px]">
+      <ChatPanel key={workspace.matter.id} />
+    </div>
+  );
+}
+
+// Honest empty-state for a mode whose real data does not exist yet (no mock).
+function EmptyMode({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-hairline bg-panel p-6 text-center">
+      <div className="font-serif text-lg text-ink">{title}</div>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted">{body}</p>
+    </div>
+  );
+}
+
+// Read-only review of the REAL Estratto→Citazione chain (#64), with the per-row
+// outcome derived from the #9 verification. Honest empty-state when there are no
+// Estratti. Pure projection in `lib/review` — no domain logic here.
+function ReviewSurface({ workspace }: { workspace: WorkspaceView }) {
+  const { t } = useTranslation();
+  const rows = reviewRows({
+    sources: workspace.sources ?? [],
+    excerpts: workspace.excerpts ?? [],
+    citations: workspace.citations ?? [],
+    verification: workspace.verification,
+  });
+
+  if (rows.length === 0) {
+    return (
+      <div data-testid="surface-review">
+        <p className="text-sm text-muted">{t("workspace.review.empty")}</p>
+      </div>
+    );
+  }
+
+  const esitoLabel = (e: ReviewEsito) =>
+    e === "coherent"
+      ? t("workspace.review.coherent")
+      : e === "warning"
+        ? t("workspace.review.warning")
+        : t("workspace.review.uncited");
+  const esitoTone = (e: ReviewEsito): "default" | "verified" | "warning" =>
+    e === "coherent" ? "verified" : e === "warning" ? "warning" : "default";
+
+  return (
+    <div data-testid="surface-review" className="space-y-1">
+      <div className="grid grid-cols-[1fr_1.4fr_auto] gap-3 border-b border-hairline pb-1 font-mono text-[10px] uppercase tracking-wide text-muted">
+        <span>{t("review.colFonte")}</span>
+        <span>{t("review.colEstratto")}</span>
+        <span>{t("review.colEsito")}</span>
+      </div>
+      {rows.map((r) => (
+        <div
+          key={`${r.kind}-${r.excerptId}`}
+          className="grid grid-cols-[1fr_1.4fr_auto] items-start gap-3 border-b border-hairline py-2 text-sm"
+        >
+          <div>
+            <div className="text-ink">{r.fonte}</div>
+            <div className="font-mono text-[11px] text-muted">{r.anchor}</div>
+          </div>
+          <div>
+            <blockquote className="border-l-2 border-hairline pl-2 text-[12px] text-muted">
+              “{r.estratto}”
+            </blockquote>
+            {r.claim && <div className="mt-1 text-[13px] text-ink">↳ {r.claim}</div>}
+          </div>
+          <Badge tone={esitoTone(r.esito)}>{esitoLabel(r.esito)}</Badge>
+        </div>
+      ))}
+    </div>
+  );
 }
