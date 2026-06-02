@@ -16,6 +16,8 @@ pub fn run() {
             commands::workspace::add_excerpt,
             commands::workspace::add_citation,
             commands::workspace::export_markdown,
+            commands::workspace::set_source_text,
+            commands::workspace::get_source_text,
             commands::workspace::update_excerpt,
             commands::workspace::delete_excerpt,
             commands::workspace::update_citation,

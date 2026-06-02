@@ -18,6 +18,8 @@ import {
   deleteExcerpt,
   updateCitation,
   deleteCitation,
+  getSourceText,
+  setSourceText,
 } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
@@ -151,6 +153,12 @@ export default function AppShell() {
     }
   };
 
+  // #52 text layer: bound to the open Pratica. The renderer extracts the text
+  // (pdf.js / UTF-8); these only persist/read the local sidecar (no egress).
+  const handleGetSourceText = (sourceId: string) => getSourceText(open!.matter.id, sourceId);
+  const handleSetSourceText = (sourceId: string, text: string) =>
+    setSourceText(open!.matter.id, sourceId, text);
+
   const handleExportMarkdown = async (): Promise<boolean> => {
     setExportError(null);
     if (!open) return false;
@@ -213,6 +221,8 @@ export default function AppShell() {
           onDeleteExcerpt={open ? handleDeleteExcerpt : undefined}
           onUpdateCitation={open ? handleUpdateCitation : undefined}
           onDeleteCitation={open ? handleDeleteCitation : undefined}
+          onGetSourceText={open ? handleGetSourceText : undefined}
+          onSetSourceText={open ? handleSetSourceText : undefined}
         />
       </div>
       <StatusStrip />
