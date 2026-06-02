@@ -5,6 +5,7 @@
 //! in isolation. Tauri depends on `core`, never the other way around.
 
 pub mod chat;
+pub mod citation_candidates;
 pub mod domain;
 pub mod evidence;
 pub mod export;

@@ -5,10 +5,15 @@
 //! lawyer approves a candidate, which becomes a real Estratto through
 //! [`accept_evidence_candidate`] (quote verified against the text layer, #52).
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use quaero_core::citation_candidates::{
+    CitationCandidateProvider, CitationRequest, ExcerptInput, StubCitationProvider,
+    DEFAULT_MAX_CITATION_CANDIDATES,
+};
 use quaero_core::domain::WorkspaceView;
 use quaero_core::evidence::{
     quote_occurs_in_text, EvidenceCandidate, EvidenceCandidateProvider, EvidenceRequest,
@@ -246,4 +251,73 @@ pub async fn propose_evidence_local(
         truncated: proposal.truncated,
         analyzed_chars: proposal.analyzed_chars,
     })
+}
+
+/// A citation candidate scored against the workspace: `valid` = its `excerptId`
+/// references an existing real Estratto. Invalid candidates are shown but not
+/// approvable (a Citazione must always cite a real Estratto, ADR-0007).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoredCitationCandidate {
+    pub excerpt_id: String,
+    pub claim: String,
+    pub reason: String,
+    pub valid: bool,
+}
+
+/// IPC: propose candidate Citazioni (#60, V1C) for the real Estratti of a Pratica
+/// that do NOT already have a Citazione. Offline Stub only — no LLM, no network,
+/// no auto-save. Candidates are NOT persisted; each carries the `excerptId` of a
+/// real Estratto (`valid`). Approval goes through the canonical `add_citation`.
+#[tauri::command]
+pub fn propose_citations(
+    app: AppHandle,
+    matter_id: String,
+) -> Result<Vec<ScoredCitationCandidate>, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    let view = store::open(&ws_dir, &matter_id).map_err(|e| e.to_string())?;
+
+    // Real excerpt ids, and those that already have at least one citation.
+    let real: HashSet<&str> = view.excerpts.iter().map(|e| e.id().0.as_str()).collect();
+    let cited: HashSet<&str> = view
+        .citations
+        .iter()
+        .map(|c| c.excerpt_id().0.as_str())
+        .collect();
+
+    // Propose only for real excerpts without a citation yet.
+    let inputs: Vec<ExcerptInput> = view
+        .excerpts
+        .iter()
+        .filter(|e| !cited.contains(e.id().0.as_str()))
+        .map(|e| ExcerptInput {
+            excerpt_id: e.id().0.clone(),
+            quote: e.quote().to_string(),
+            anchor_kind: e.anchor().kind.clone(),
+            anchor_value: e.anchor().value.clone(),
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let request = CitationRequest {
+        excerpts: inputs,
+        max_candidates: DEFAULT_MAX_CITATION_CANDIDATES,
+    };
+    let out = StubCitationProvider
+        .propose(&request)
+        .map_err(|e| e.to_string())?;
+
+    let scored = out
+        .candidates
+        .into_iter()
+        .map(|c| ScoredCitationCandidate {
+            valid: real.contains(c.excerpt_id.as_str()),
+            excerpt_id: c.excerpt_id,
+            claim: c.claim,
+            reason: c.reason,
+        })
+        .collect();
+    Ok(scored)
 }
