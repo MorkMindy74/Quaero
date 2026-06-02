@@ -27,3 +27,11 @@ _(nessuno ancora — aggiungere qui man mano: file di destinazione, fonte, file 
 | Dove (Quaero) | Da (progetto/file) | Licenza | Commit |
 |---|---|---|---|
 | — | — | — | — |
+
+## Dipendenze runtime di terze parti
+
+Librerie incluse come pacchetti (non copia di codice), usate come motori tecnici isolati. La licenza deve restare compatibile con AGPL-3.0.
+
+| Dipendenza | Versione | Licenza | Dove | Uso |
+|---|---|---|---|---|
+| [`pdfjs-dist`](https://github.com/mozilla/pdf.js) | 4.10.38 (pinned) | Apache-2.0 | frontend (`apps/desktop/frontend`) | Estrazione **testo** da PDF nel renderer/webview (#52, Text Layer Import V1). Worker bundlato **localmente** (no CDN), `isEvalSupported:false` (mitiga CVE-2024-4367). Nessun parsing PDF lato Rust. |

@@ -4,7 +4,9 @@ import { TabButton, Button, Badge } from "../ui";
 import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } from "../cards";
 import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
+import { SourceTextPanel } from "./SourceTextPanel";
 import { nextActionKey } from "../../lib/pilot";
+import type { SourceText } from "../../lib/ipc";
 import {
   workspaceView,
   reasoningSteps,
@@ -344,18 +346,38 @@ function SourcesTab({
   onSelect,
   onImportFile,
   importError,
+  matterId,
+  onGetSourceText,
+  onSetSourceText,
 }: {
   view: WorkspaceView;
   selected: string | null;
   onSelect: (id: string) => void;
   onImportFile?: (file: File) => void;
   importError?: string | null;
+  matterId?: string;
+  onGetSourceText?: (matterId: string, sourceId: string) => Promise<SourceText>;
+  onSetSourceText?: (
+    matterId: string,
+    sourceId: string,
+    expectedSha256: string,
+    text: string,
+  ) => Promise<SourceText>;
 }) {
   const { t } = useTranslation();
   const { client, matter, sources, dossiers } = view;
   const findSource = (id: string) => sources.find((s) => s.id === id);
   const dynamic = dossiers.filter((d) => d.kind === "Dynamic");
   const manual = dossiers.filter((d) => d.kind === "Manual");
+  // Text layer (#52): for a real open Pratica, the selected Documento source
+  // gets a text-layer panel (extract/preview). Shown once (not per dossier).
+  const selectedSource = selected ? findSource(selected) : undefined;
+  const showTextLayer =
+    !!matterId &&
+    !!onGetSourceText &&
+    !!onSetSourceText &&
+    selectedSource?.kind === "Documento" &&
+    !!selectedSource.file;
 
   return (
     <div className="space-y-3">
@@ -384,6 +406,18 @@ function SourcesTab({
             </p>
           )}
         </div>
+      )}
+
+      {showTextLayer && selectedSource && matterId && onGetSourceText && onSetSourceText && (
+        <SourceTextPanel
+          // Remount per matter:source so a fresh panel never inherits an
+          // in-flight extraction's state from a previously-selected Fonte.
+          key={`${matterId}:${selectedSource.id}`}
+          matterId={matterId}
+          source={selectedSource}
+          onGet={onGetSourceText}
+          onSet={onSetSourceText}
+        />
       )}
 
       {dynamic.map((dossier) => (
@@ -493,6 +527,8 @@ export function RightContextPanel({
   onDeleteExcerpt,
   onUpdateCitation,
   onDeleteCitation,
+  onGetSourceText,
+  onSetSourceText,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -513,6 +549,13 @@ export function RightContextPanel({
   onDeleteExcerpt?: (excerptId: string) => Promise<boolean>;
   onUpdateCitation?: (citationId: string, claim: string) => Promise<boolean>;
   onDeleteCitation?: (citationId: string) => Promise<boolean>;
+  onGetSourceText?: (matterId: string, sourceId: string) => Promise<SourceText>;
+  onSetSourceText?: (
+    matterId: string,
+    sourceId: string,
+    expectedSha256: string,
+    text: string,
+  ) => Promise<SourceText>;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -570,6 +613,9 @@ export function RightContextPanel({
             onSelect={setSelected}
             onImportFile={onImportFile}
             importError={importError}
+            matterId={workspace?.matter.id}
+            onGetSourceText={onGetSourceText}
+            onSetSourceText={onSetSourceText}
           />
         )}
         {tab === "excerpts" && (

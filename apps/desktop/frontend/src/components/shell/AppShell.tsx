@@ -18,6 +18,8 @@ import {
   deleteExcerpt,
   updateCitation,
   deleteCitation,
+  getSourceText,
+  setSourceText,
 } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
 import type { WorkspaceView } from "../../domain/types";
@@ -213,6 +215,8 @@ export default function AppShell() {
           onDeleteExcerpt={open ? handleDeleteExcerpt : undefined}
           onUpdateCitation={open ? handleUpdateCitation : undefined}
           onDeleteCitation={open ? handleDeleteCitation : undefined}
+          onGetSourceText={open ? getSourceText : undefined}
+          onSetSourceText={open ? setSourceText : undefined}
         />
       </div>
       <StatusStrip />

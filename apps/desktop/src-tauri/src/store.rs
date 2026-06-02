@@ -38,6 +38,11 @@ use serde::Serialize;
 /// Maximum size of a single imported document (#6 cap; no streaming yet).
 pub const MAX_IMPORT_BYTES: u64 = 25 * 1024 * 1024;
 
+/// Maximum size of a derived text-layer sidecar, in bytes (#52). Mirrors the
+/// import cap so a pathological document can never produce an unbounded sidecar,
+/// and bounds the read on the way back out.
+pub const MAX_TEXT_BYTES: u64 = 25 * 1024 * 1024;
+
 /// Per-process counter giving each in-flight write its own temp file, so two
 /// concurrent writers never collide on a shared temp path.
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -972,6 +977,221 @@ pub fn delete_citation(
             .without_citation(&CitationId::new(citation_id))
             .map_err(|e| StoreError::Domain(e.to_string()))
     })
+}
+
+// --- #52 Text Layer Import: derived, local text sidecar --------------------
+
+/// State of a source's derived text layer (#52). `Available` carries the text;
+/// `Empty` means a supported file with no useful text (a 0/whitespace sidecar);
+/// `Absent` means no sidecar yet (not extracted, or a file-less Fonte). The
+/// renderer-only states ("extraction failed", "unsupported format") never reach
+/// the store — they are computed in the UI from the extraction attempt / format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceTextStatus {
+    Available,
+    Empty,
+    Absent,
+}
+
+/// Result of reading/writing a text layer: a status plus the text when present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceText {
+    pub status: SourceTextStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Classify a text string into the persisted status: whitespace-only → `Empty`.
+fn classify_text(text: &str) -> SourceText {
+    if text.trim().is_empty() {
+        SourceText {
+            status: SourceTextStatus::Empty,
+            text: None,
+        }
+    } else {
+        SourceText {
+            status: SourceTextStatus::Available,
+            text: Some(text.to_string()),
+        }
+    }
+}
+
+/// Persist a derived text layer for an imported Documento source (#52).
+///
+/// The text is produced **in the renderer** (UTF-8 for `.txt/.md`, pdf.js for
+/// PDF); Rust **never parses the document** — it validates and writes the text as
+/// a sidecar `files/<matter>/<storedName>.txt`, atomically (unique temp +
+/// rename). Empty text is accepted and persists the `Empty` state (supported
+/// file, no useful text), distinct from `Absent` (no sidecar yet). The sidecar
+/// sits next to the immutable blob, so it is structurally bound to that version
+/// (the `sha256`-pinned bytes are never overwritten).
+///
+/// Coherence is **backend-enforced**: the caller passes the `expected_sha256` it
+/// captured at extraction start, and the store verifies it (under the per-matter
+/// lock) against the loaded `SourceRef.file.sha256` before writing. So even if
+/// the renderer switches Pratica/Fonte mid-extraction (source ids are only
+/// workspace-local), a write whose digest does not match the target source is
+/// refused — the text layer can never be misassociated with the wrong version.
+///
+/// Errors: unknown matter (`NotFound`); unknown or file-less source (`Domain`);
+/// digest mismatch (`EvidenceIntegrity`); hostile stored name (`Corrupt` at load
+/// / `Domain` here); text over the cap (`TooLarge`). Nothing partial is ever
+/// left on failure.
+pub fn set_source_text(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+    expected_sha256: &str,
+    text: &str,
+) -> Result<SourceText, StoreError> {
+    // Bound the sidecar before touching disk or the lock.
+    if text.len() as u64 > MAX_TEXT_BYTES {
+        return Err(StoreError::TooLarge {
+            limit: MAX_TEXT_BYTES,
+            actual: text.len() as u64,
+        });
+    }
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+
+    // Serialise with the other read-modify-write ops on this matter.
+    let lock = matter_lock(base, &matter_stem);
+    let _guard = lock.lock().expect("per-matter lock poisoned");
+
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    let source = workspace
+        .sources()
+        .iter()
+        .find(|s| s.id.0 == source_id)
+        .ok_or_else(|| StoreError::Domain(format!("unknown source: {source_id}")))?;
+    let file = source
+        .file
+        .as_ref()
+        .ok_or_else(|| StoreError::Domain(format!("source {source_id} has no file")))?;
+
+    // Backend-enforced coherence: the text must be derived from the exact pinned
+    // version the caller saw. Reject any write whose expected digest disagrees
+    // with the loaded source (closes cross-Pratica/Fonte misassociation, since
+    // source ids are only workspace-local). Nothing is written on mismatch.
+    if file.sha256 != expected_sha256 {
+        return Err(StoreError::EvidenceIntegrity {
+            source: source_id.to_string(),
+            reason: "expected sha256 does not match the stored source".to_string(),
+        });
+    }
+
+    // Defence-in-depth: `load_consistent` already rejects unsafe stored names,
+    // but never build a path from one without re-checking.
+    if !is_safe_stored_name(&file.stored_name) {
+        return Err(StoreError::Domain(format!(
+            "unsafe stored file name {:?}",
+            file.stored_name
+        )));
+    }
+    let sidecar_name = format!("{}.txt", file.stored_name);
+    // Safe stored name + ".txt" is still a bare, safe filename.
+    debug_assert!(is_safe_stored_name(&sidecar_name));
+
+    let matter_dir = files_dir.join(&matter_stem);
+    fs::create_dir_all(&matter_dir)?;
+    let sidecar = matter_dir.join(&sidecar_name);
+
+    // Atomic publish: unique temp + rename. The temp is removed on ANY pre-rename
+    // failure (e.g. a partial `write` on a full disk) as well as on a rename
+    // failure, so no partial fragment of client text is ever left behind.
+    let tmp = unique_tmp(&matter_dir, &file.stored_name);
+    let publish = fs::write(&tmp, text.as_bytes()).and_then(|()| fs::rename(&tmp, &sidecar));
+    if let Err(e) = publish {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+
+    Ok(classify_text(text))
+}
+
+/// Read the derived text layer of a source (#52). Read-only, no parsing.
+///
+/// Returns `Absent` when there is no sidecar (not extracted yet) or the source
+/// has no file; `Empty` when the sidecar holds only whitespace; `Available` with
+/// the text otherwise. A sidecar that is not a regular file, exceeds the cap, or
+/// is not valid UTF-8 is treated as `Corrupt` (fail-closed). Unknown matter →
+/// `NotFound`; unknown source → `Domain`.
+pub fn get_source_text(
+    base: &Path,
+    files_dir: &Path,
+    matter_id: &str,
+    source_id: &str,
+) -> Result<SourceText, StoreError> {
+    let matter_stem = safe_file_stem(matter_id)?.to_string();
+    let ws_path = workspace_path(base, matter_id)?;
+    if !ws_path.exists() {
+        return Err(StoreError::NotFound(matter_id.to_string()));
+    }
+    let workspace = load_consistent(&ws_path)?;
+
+    let source = workspace
+        .sources()
+        .iter()
+        .find(|s| s.id.0 == source_id)
+        .ok_or_else(|| StoreError::Domain(format!("unknown source: {source_id}")))?;
+    let file = match source.file.as_ref() {
+        Some(f) => f,
+        // A reference-only Fonte legitimately has no document → no text layer.
+        None => {
+            return Ok(SourceText {
+                status: SourceTextStatus::Absent,
+                text: None,
+            })
+        }
+    };
+    if !is_safe_stored_name(&file.stored_name) {
+        return Err(StoreError::Domain(format!(
+            "unsafe stored file name {:?}",
+            file.stored_name
+        )));
+    }
+
+    let sidecar = files_dir
+        .join(&matter_stem)
+        .join(format!("{}.txt", file.stored_name));
+
+    // No-follow metadata: a missing sidecar is simply Absent; a non-regular file
+    // (symlink/reparse/dir/device) at that path is hostile → fail-closed.
+    let meta = match fs::symlink_metadata(&sidecar) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(SourceText {
+                status: SourceTextStatus::Absent,
+                text: None,
+            })
+        }
+    };
+    if !meta.file_type().is_file() {
+        return Err(StoreError::Corrupt {
+            id: matter_stem,
+            reason: "text sidecar is not a regular file".to_string(),
+        });
+    }
+    if meta.len() > MAX_TEXT_BYTES {
+        return Err(StoreError::Corrupt {
+            id: matter_stem,
+            reason: "text sidecar exceeds the size limit".to_string(),
+        });
+    }
+
+    let bytes = fs::read(&sidecar)?;
+    let text = String::from_utf8(bytes).map_err(|_| StoreError::Corrupt {
+        id: matter_stem.clone(),
+        reason: "text sidecar is not valid UTF-8".to_string(),
+    })?;
+    Ok(classify_text(&text))
 }
 
 #[cfg(test)]
@@ -2223,5 +2443,246 @@ mod tests {
             delete_excerpt(empty.path(), "nope", "e1"),
             Err(StoreError::NotFound(_))
         ));
+    }
+
+    // ----- #52 Text Layer Import -----
+
+    /// Seed a Pratica "m" with one imported Documento, returning
+    /// (ws, files, sid, sha256) — the digest is the `expected_sha256` callers pass.
+    fn seed_with_document() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        create(ws.path(), client("alfa", "Alfa"), matter("m", "alfa", "T")).unwrap();
+        let view =
+            import_document(ws.path(), files.path(), "m", "contratto.pdf", b"%PDF-bytes").unwrap();
+        let sid = view.sources[0].id.0.clone();
+        let sha = view.sources[0].file.as_ref().unwrap().sha256.clone();
+        (ws, files, sid, sha)
+    }
+
+    #[test]
+    fn set_then_get_text_layer_round_trips_available() {
+        let (ws, files, sid, sha) = seed_with_document();
+        let set = set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Articolo 1. Testo.",
+        )
+        .unwrap();
+        assert_eq!(set.status, SourceTextStatus::Available);
+
+        let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
+        assert_eq!(got.status, SourceTextStatus::Available);
+        assert_eq!(got.text.as_deref(), Some("Articolo 1. Testo."));
+
+        // The sidecar sits next to the blob, named <storedName>.txt.
+        let stored = open(ws.path(), "m").unwrap().sources[0]
+            .file
+            .as_ref()
+            .unwrap()
+            .stored_name
+            .clone();
+        let sidecar = files.path().join("m").join(format!("{stored}.txt"));
+        assert!(sidecar.is_file());
+        assert_eq!(fs::read_to_string(&sidecar).unwrap(), "Articolo 1. Testo.");
+
+        // No temp residue after a successful publish.
+        let tmp_left = fs::read_dir(files.path().join("m"))
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("tmp"));
+        assert!(!tmp_left, "no .tmp should remain after set_source_text");
+    }
+
+    #[test]
+    fn set_text_layer_rejects_wrong_expected_sha_and_writes_nothing() {
+        // Backend-enforced coherence: a digest that does not match the loaded
+        // source is refused (closes cross-Pratica/Fonte misassociation).
+        let (ws, files, sid, _sha) = seed_with_document();
+        let r = set_source_text(ws.path(), files.path(), "m", &sid, &"b".repeat(64), "x");
+        assert!(matches!(r, Err(StoreError::EvidenceIntegrity { .. })));
+        // nothing persisted
+        assert_eq!(
+            get_source_text(ws.path(), files.path(), "m", &sid)
+                .unwrap()
+                .status,
+            SourceTextStatus::Absent
+        );
+    }
+
+    #[test]
+    fn empty_text_persists_empty_state_distinct_from_absent() {
+        let (ws, files, sid, sha) = seed_with_document();
+        // before extraction → Absent
+        assert_eq!(
+            get_source_text(ws.path(), files.path(), "m", &sid)
+                .unwrap()
+                .status,
+            SourceTextStatus::Absent
+        );
+        // whitespace-only extraction (e.g. scanned PDF) → Empty, persisted
+        let set = set_source_text(ws.path(), files.path(), "m", &sid, &sha, "   \n\t").unwrap();
+        assert_eq!(set.status, SourceTextStatus::Empty);
+        assert!(set.text.is_none());
+        let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
+        assert_eq!(got.status, SourceTextStatus::Empty);
+        assert!(got.text.is_none());
+    }
+
+    #[test]
+    fn get_text_layer_absent_when_no_sidecar() {
+        let (ws, files, sid, _sha) = seed_with_document();
+        let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
+        assert_eq!(got.status, SourceTextStatus::Absent);
+        assert!(got.text.is_none());
+    }
+
+    #[test]
+    fn set_text_layer_rejects_oversize_and_writes_nothing() {
+        let (ws, files, sid, sha) = seed_with_document();
+        let big = "a".repeat((MAX_TEXT_BYTES + 1) as usize);
+        let r = set_source_text(ws.path(), files.path(), "m", &sid, &sha, &big);
+        assert!(matches!(r, Err(StoreError::TooLarge { .. })));
+        // no sidecar written
+        assert_eq!(
+            get_source_text(ws.path(), files.path(), "m", &sid)
+                .unwrap()
+                .status,
+            SourceTextStatus::Absent
+        );
+    }
+
+    #[test]
+    fn set_text_layer_on_unknown_source_is_rejected() {
+        let (ws, files, _sid, _sha) = seed_with_document();
+        let r = set_source_text(ws.path(), files.path(), "m", "ghost", &"a".repeat(64), "x");
+        assert!(matches!(r, Err(StoreError::Domain(_))));
+    }
+
+    #[test]
+    fn text_layer_on_missing_matter_is_not_found() {
+        let ws = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        assert!(matches!(
+            set_source_text(ws.path(), files.path(), "nope", "s1", &"a".repeat(64), "x"),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            get_source_text(ws.path(), files.path(), "nope", "s1"),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn text_layer_on_fileless_source_is_domain_error_or_absent() {
+        // A reference-only Fonte (no StoredFile): set is rejected, get is Absent.
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        let ws = Workspace::new_with_evidence(
+            client("alfa", "Alfa"),
+            matter("m", "alfa", "T"),
+            vec![SourceRef {
+                id: SourceId::new("ref-1"),
+                kind: SourceType::Norma,
+                title: "Codice civile".to_string(),
+                meta: String::new(),
+                file: None,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        update(dir.path(), &ws).unwrap();
+
+        assert!(matches!(
+            set_source_text(dir.path(), files.path(), "m", "ref-1", &"a".repeat(64), "x"),
+            Err(StoreError::Domain(_))
+        ));
+        assert_eq!(
+            get_source_text(dir.path(), files.path(), "m", "ref-1")
+                .unwrap()
+                .status,
+            SourceTextStatus::Absent
+        );
+    }
+
+    #[test]
+    fn text_layer_survives_reopen_and_is_coherent_with_blob() {
+        // The text layer is bound to the immutable blob: re-importing/reopening
+        // keeps it readable and coherent (blob never overwritten).
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(
+            ws.path(),
+            files.path(),
+            "m",
+            &sid,
+            &sha,
+            "Testo persistito.",
+        )
+        .unwrap();
+        // simulate reopen by going through open() then get_source_text again
+        let reopened = open(ws.path(), "m").unwrap();
+        let sid2 = reopened.sources[0].id.0.clone();
+        assert_eq!(sid2, sid);
+        let got = get_source_text(ws.path(), files.path(), "m", &sid2).unwrap();
+        assert_eq!(got.text.as_deref(), Some("Testo persistito."));
+    }
+
+    #[test]
+    fn pre_slice_workspace_has_absent_text_layer() {
+        // Retro-compat: a Pratica imported before this slice has no sidecar.
+        let (ws, files, sid, _sha) = seed_with_document();
+        // never call set_source_text → behaves exactly like an old workspace
+        let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
+        assert_eq!(got.status, SourceTextStatus::Absent);
+    }
+
+    #[test]
+    fn text_layer_rejects_hostile_stored_name_at_load() {
+        // A planted hostile storedName is intercepted by load_consistent for both
+        // set and get (fail-closed), never building a path from it.
+        let dir = tempdir().unwrap();
+        let files = tempdir().unwrap();
+        plant_workspace_with_stored_name(dir.path(), "../../evil.bin");
+        assert!(matches!(
+            set_source_text(dir.path(), files.path(), "m", "s1", &"ab".repeat(32), "x"),
+            Err(StoreError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            get_source_text(dir.path(), files.path(), "m", "s1"),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn get_text_layer_rejects_non_regular_sidecar() {
+        let (ws, files, sid, _sha) = seed_with_document();
+        let stored = open(ws.path(), "m").unwrap().sources[0]
+            .file
+            .as_ref()
+            .unwrap()
+            .stored_name
+            .clone();
+        // Plant a directory where the sidecar would be.
+        let matter_dir = files.path().join("m");
+        fs::create_dir_all(&matter_dir).unwrap();
+        fs::create_dir(matter_dir.join(format!("{stored}.txt"))).unwrap();
+        assert!(matches!(
+            get_source_text(ws.path(), files.path(), "m", &sid),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn set_text_layer_overwrites_previous_extraction() {
+        let (ws, files, sid, sha) = seed_with_document();
+        set_source_text(ws.path(), files.path(), "m", &sid, &sha, "prima").unwrap();
+        set_source_text(ws.path(), files.path(), "m", &sid, &sha, "seconda").unwrap();
+        let got = get_source_text(ws.path(), files.path(), "m", &sid).unwrap();
+        assert_eq!(got.text.as_deref(), Some("seconda"));
     }
 }

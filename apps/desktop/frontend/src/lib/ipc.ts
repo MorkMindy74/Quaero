@@ -140,6 +140,37 @@ export function deleteCitation(matterId: string, citationId: string): Promise<Wo
   return invoke<WorkspaceView>("delete_citation", { matterId, citationId });
 }
 
+// --- #52 document text layer -----------------------------------------------
+
+/** Derived text-layer state of a source. Mirrors the desktop store's
+ *  `SourceText`: `available` carries text; `empty` = supported file, no useful
+ *  text; `absent` = no sidecar yet / file-less Fonte. ("failed"/"unsupported"
+ *  are renderer-only states, never returned by the store.) */
+export interface SourceText {
+  status: "available" | "empty" | "absent";
+  text?: string;
+}
+
+/** Persist a derived text layer for a Documento source (#52). The text is
+ *  produced in the renderer (UTF-8 for .txt/.md, pdf.js for PDF); the backend
+ *  never parses the document — it writes a local sidecar. `expectedSha256` is
+ *  captured at extraction start and verified by the backend (under the per-matter
+ *  lock) against the source's pinned digest, so the text can never be persisted
+ *  against the wrong version/Fonte. */
+export function setSourceText(
+  matterId: string,
+  sourceId: string,
+  expectedSha256: string,
+  text: string,
+): Promise<SourceText> {
+  return invoke<SourceText>("set_source_text", { matterId, sourceId, expectedSha256, text });
+}
+
+/** Read the derived text layer of a Documento source (#52). Read-only. */
+export function getSourceText(matterId: string, sourceId: string): Promise<SourceText> {
+  return invoke<SourceText>("get_source_text", { matterId, sourceId });
+}
+
 // --- #7 chat (stub provider) -----------------------------------------------
 
 /** A chat reply. `grounded` is always false in #7 (no citations). */

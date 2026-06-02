@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use quaero_core::domain::{Client, Matter, WorkspaceView};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{self, WorkspaceSummary};
+use crate::store::{self, SourceText, WorkspaceSummary};
 
 /// Resolve the per-app `workspaces/` directory under the OS app-data location.
 fn workspaces_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -113,6 +113,43 @@ pub fn add_citation(
 pub fn export_markdown(app: AppHandle, matter_id: String) -> Result<String, String> {
     let ws_dir = workspaces_dir(&app)?;
     store::workspace_markdown(&ws_dir, &matter_id).map_err(|e| e.to_string())
+}
+
+/// IPC: persist a derived text layer (#52) for a Documento source. The text is
+/// produced in the renderer (UTF-8 for `.txt/.md`, pdf.js for PDF); Rust does NOT
+/// parse the document — it validates and writes a local sidecar. No egress, no
+/// new capability.
+#[tauri::command]
+pub fn set_source_text(
+    app: AppHandle,
+    matter_id: String,
+    source_id: String,
+    expected_sha256: String,
+    text: String,
+) -> Result<SourceText, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    let blob_dir = files_dir(&app)?;
+    store::set_source_text(
+        &ws_dir,
+        &blob_dir,
+        &matter_id,
+        &source_id,
+        &expected_sha256,
+        &text,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// IPC: read the derived text layer of a Documento source (#52). Read-only.
+#[tauri::command]
+pub fn get_source_text(
+    app: AppHandle,
+    matter_id: String,
+    source_id: String,
+) -> Result<SourceText, String> {
+    let ws_dir = workspaces_dir(&app)?;
+    let blob_dir = files_dir(&app)?;
+    store::get_source_text(&ws_dir, &blob_dir, &matter_id, &source_id).map_err(|e| e.to_string())
 }
 
 /// IPC: edit an existing Estratto (quote + anchor + note); the Fonte link, the
