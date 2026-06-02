@@ -242,5 +242,7 @@
   "workflow.review.withWarnings": "Controllo prove: {{count}} avvisi",
   "status.privacyHeadline": "Locale e privato · Nessun dato inviato al cloud",
   "evidenceAI.draft": "Bozza — non salvata",
-  "citationAI.draft": "Bozza — non salvata"
+  "citationAI.draft": "Bozza — non salvata",
+  "workflow.exporting": "Esportazione…",
+  "workflow.exportDone": "Report esportato ✓ (controlla i Download)"
 }

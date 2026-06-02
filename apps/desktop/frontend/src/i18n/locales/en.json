@@ -242,5 +242,7 @@
   "workflow.review.withWarnings": "Evidence check: {{count}} warning(s)",
   "status.privacyHeadline": "Local & private · No data sent to the cloud",
   "evidenceAI.draft": "Draft — not saved",
-  "citationAI.draft": "Draft — not saved"
+  "citationAI.draft": "Draft — not saved",
+  "workflow.exporting": "Exporting…",
+  "workflow.exportDone": "Report exported ✓ (check your Downloads)"
 }

@@ -16,7 +16,7 @@ interface MainWorkspaceProps {
    *  workflow for it (#62), instead of the #3 mock. */
   workspace?: WorkspaceView;
   onGoToTab?: (tab: GuideTab) => void;
-  onExport?: () => void;
+  onExport?: () => Promise<boolean>;
 }
 
 // Spec §3 comp 04. #62: when a real Pratica is open the centre is the guided
@@ -42,7 +42,7 @@ export function MainWorkspace({ matter, workspace, onGoToTab, onExport }: MainWo
             citations={workspace.citations?.length ?? 0}
             verificationWarnings={workspace.verification?.summary?.warnings ?? null}
             onGoToTab={(tab: GuideTab) => onGoToTab?.(tab)}
-            onExport={() => onExport?.()}
+            onExport={() => onExport?.() ?? Promise.resolve(false)}
           />
         </div>
       </main>

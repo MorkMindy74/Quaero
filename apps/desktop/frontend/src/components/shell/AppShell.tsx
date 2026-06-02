@@ -253,7 +253,7 @@ export default function AppShell() {
           matter={matter}
           workspace={open ?? undefined}
           onGoToTab={setRightTab}
-          onExport={() => void handleExportMarkdown()}
+          onExport={handleExportMarkdown}
         />
         <RightContextPanel
           workspace={open ?? undefined}

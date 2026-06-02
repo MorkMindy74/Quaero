@@ -1,11 +1,11 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import "../../i18n";
 import { WorkflowGuide } from "./WorkflowGuide";
 
 test("empty Pratica → first step 'Carica un documento', CTA jumps to sources", () => {
   const onGoToTab = vi.fn();
-  const onExport = vi.fn();
+  const onExport = vi.fn(async () => true);
   render(
     <WorkflowGuide
       sources={0}
@@ -22,9 +22,9 @@ test("empty Pratica → first step 'Carica un documento', CTA jumps to sources",
   expect(onExport).not.toHaveBeenCalled();
 });
 
-test("with citations → final step exports and surfaces the chain verdict", () => {
+test("with citations → final step exports and surfaces the chain verdict", async () => {
   const onGoToTab = vi.fn();
-  const onExport = vi.fn();
+  const onExport = vi.fn(async () => true);
   render(
     <WorkflowGuide
       sources={1}
@@ -36,9 +36,10 @@ test("with citations → final step exports and surfaces the chain verdict", () 
     />,
   );
   expect(screen.getByTestId("workflow-card-title")).toHaveTextContent("Controlla ed esporta");
-  // Primary action exports.
+  // Primary action exports AND shows visible confirmation (the lawyer must see it).
   fireEvent.click(screen.getByRole("button", { name: "Esporta report" }));
   expect(onExport).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(screen.getByTestId("workflow-export-done")).toBeInTheDocument());
   // Secondary jumps to the evidence check.
   fireEvent.click(screen.getByRole("button", { name: "Apri Controllo prove" }));
   expect(onGoToTab).toHaveBeenCalledWith("verify");
@@ -56,7 +57,7 @@ test("middle step 'claims' jumps to the Estratti tab", () => {
       citations={0}
       verificationWarnings={0}
       onGoToTab={onGoToTab}
-      onExport={vi.fn()}
+      onExport={vi.fn(async () => true)}
     />,
   );
   expect(screen.getByTestId("workflow-card-title")).toHaveTextContent(
