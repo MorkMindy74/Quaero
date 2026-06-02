@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import "../../i18n";
 import type { SourceRef } from "../../domain/types";
-import type { EvidenceCandidate } from "../../lib/ipc";
+import type { EvidenceCandidate, LocalEvidenceResult } from "../../lib/ipc";
 import { EvidenceCandidatesPanel } from "./EvidenceCandidatesPanel";
 
 const SOURCE: SourceRef = {
@@ -116,4 +116,62 @@ test("empty proposal (no text layer) shows a hint", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Proponi Evidence" }));
   expect(await screen.findByText(/estrai prima il testo/i)).toBeInTheDocument();
   expect(screen.queryAllByTestId("evidence-candidate")).toHaveLength(0);
+});
+
+// ----- V1B: local Ollama Evidence provider (consent gated) -----
+
+function renderWithLocal(result: LocalEvidenceResult) {
+  const onProposeLocal = vi.fn(async (_m: string, _s: string, _c: boolean) => result);
+  render(
+    <EvidenceCandidatesPanel
+      matterId="m"
+      source={SOURCE}
+      localEnabled
+      onPropose={vi.fn(async () => [])}
+      onProposeLocal={onProposeLocal}
+      onAccept={vi.fn(async () => true)}
+    />,
+  );
+  return { onProposeLocal };
+}
+
+test("the local-model action is hidden unless enabled", () => {
+  renderPanel({});
+  expect(
+    screen.queryByRole("button", { name: "Proponi con modello locale" }),
+  ).not.toBeInTheDocument();
+});
+
+test("local proposal asks consent; cancel sends nothing", async () => {
+  const { onProposeLocal } = renderWithLocal({ candidates: [], truncated: false, analyzedChars: 0 });
+  fireEvent.click(screen.getByRole("button", { name: "Proponi con modello locale" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Annulla" }));
+  expect(onProposeLocal).not.toHaveBeenCalled();
+});
+
+test("confirming consent calls the local provider; invalid candidates are not approvable", async () => {
+  const result: LocalEvidenceResult = {
+    candidates: [
+      { quote: "presente nel testo", anchorKind: "paragraph", anchorValue: "1", reason: "ok", valid: true },
+      { quote: "quote inventata", anchorKind: "paragraph", anchorValue: "2", reason: "hallu", valid: false },
+    ],
+    truncated: true,
+    analyzedChars: 12000,
+  };
+  const { onProposeLocal } = renderWithLocal(result);
+
+  fireEvent.click(screen.getByRole("button", { name: "Proponi con modello locale" }));
+  fireEvent.click(screen.getByRole("button", { name: "Invia al modello locale" }));
+
+  await waitFor(() => expect(onProposeLocal).toHaveBeenCalledWith("m", "s1", true));
+  await waitFor(() => expect(screen.getAllByTestId("evidence-candidate")).toHaveLength(2));
+
+  const statuses = screen.getAllByTestId("evidence-candidate-status");
+  expect(statuses[0]).toHaveTextContent("non salvato");
+  expect(statuses[1]).toHaveTextContent("non valido");
+  // Only the valid candidate is approvable.
+  expect(screen.getAllByRole("button", { name: "Approva → crea Estratto" })).toHaveLength(1);
+  // Truncation is surfaced explicitly.
+  expect(screen.getByTestId("evidence-truncation")).toHaveTextContent("12000");
 });

@@ -194,6 +194,38 @@ export function proposeEvidence(
   return invoke<EvidenceCandidate[]>("propose_evidence", { matterId, sourceId });
 }
 
+/** A candidate from the LOCAL model (#58, V1B), scored against the text layer.
+ *  `valid=false` means the model proposed a quote not present in the document —
+ *  shown but never approvable. */
+export interface ScoredEvidenceCandidate extends EvidenceCandidate {
+  valid: boolean;
+}
+
+/** Result of a local-model proposal, with the explicit truncation notice. */
+export interface LocalEvidenceResult {
+  candidates: ScoredEvidenceCandidate[];
+  truncated: boolean;
+  analyzedChars: number;
+}
+
+/** Which Evidence provider is active: "stub" (offline) | "ollamaLocal". Used to
+ *  gate the "propose with local model" action. Config flag only, no client data. */
+export function evidenceProviderKind(): Promise<string> {
+  return invoke<string>("evidence_provider_kind");
+}
+
+/** Propose Evidence candidates via the LOCAL Ollama model (#58, V1B). Requires
+ *  explicit `consent` (the backend refuses without it) AND the opt-in env. The
+ *  document text layer is sent only to a loopback model, via the Privacy Guard.
+ *  Candidates are NOT persisted; each carries a `valid` flag. */
+export function proposeEvidenceLocal(
+  matterId: string,
+  sourceId: string,
+  consent: boolean,
+): Promise<LocalEvidenceResult> {
+  return invoke<LocalEvidenceResult>("propose_evidence_local", { matterId, sourceId, consent });
+}
+
 /** Turn an approved candidate into a real Estratto (#55). The backend verifies,
  *  under the per-matter lock, that the `quote` occurs in the source's text layer;
  *  otherwise it refuses with no write. Returns the updated view. */
