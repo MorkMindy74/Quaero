@@ -47,9 +47,18 @@ export function SourceTextPanel({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const fmt = source.file ? classifyFormat(source.file.originalName) : null;
+
+  // Identity of the currently-displayed target. An async extraction captures
+  // this at start and re-checks it before every post-await `setState`, so a slow
+  // extraction that resolves AFTER the user selected another Fonte/Pratica can
+  // never repaint the now-visible panel with stale text (cross-context leak).
+  // The parent also remounts this component by key per matter:source, so this is
+  // belt-and-suspenders that is also unit-testable on a same-instance re-render.
+  const targetKey = `${matterId}|${source.id}|${source.file?.sha256 ?? ""}`;
+  const targetRef = useRef(targetKey);
+  targetRef.current = targetKey;
 
   // Load the persisted state when the selected source changes. Unsupported
   // formats never hit the store (status derived from the filename).
@@ -57,6 +66,9 @@ export function SourceTextPanel({
     let alive = true;
     setError(null);
     setPreviewOpen(false);
+    // Clear any stale busy/error left by an extraction started on a previous
+    // source (whose async completion is now guarded out by targetRef).
+    setBusy(false);
     if (!source.file) {
       setStatus("absent");
       return;
@@ -91,6 +103,9 @@ export function SourceTextPanel({
     const sid = source.id;
     const expectedSha = source.file.sha256;
     const name = source.file.originalName;
+    const myKey = targetKey;
+    // Only mutate the visible panel if it still shows the target we started on.
+    const fresh = () => targetRef.current === myKey;
     setError(null);
     setBusy(true);
     try {
@@ -99,24 +114,28 @@ export function SourceTextPanel({
       // imported one (same digest). The backend re-verifies expectedSha too.
       const digest = await sha256Hex(bytes);
       if (digest !== expectedSha) {
-        setError(t("textLayer.shaMismatch"));
+        if (fresh()) setError(t("textLayer.shaMismatch"));
         return;
       }
       const outcome = await extractDocumentText(name, bytes);
       if (outcome.kind === "unsupported") {
-        setStatus("unsupported");
+        if (fresh()) setStatus("unsupported");
       } else if (outcome.kind === "failed") {
-        setStatus("failed");
+        if (fresh()) setStatus("failed");
       } else {
+        // Always persist to the captured target (correct Fonte), but only repaint
+        // THIS panel if it still shows that same target.
         const res = await onSet(mid, sid, expectedSha, outcome.text);
-        setStatus(res.status);
-        setText(res.text ?? "");
-        setPreviewOpen(res.status === "available");
+        if (fresh()) {
+          setStatus(res.status);
+          setText(res.text ?? "");
+          setPreviewOpen(res.status === "available");
+        }
       }
     } catch {
-      setStatus("failed");
+      if (fresh()) setStatus("failed");
     } finally {
-      setBusy(false);
+      if (fresh()) setBusy(false);
     }
   };
 
@@ -148,7 +167,6 @@ export function SourceTextPanel({
           <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-hairline bg-panel-2 px-2 py-1 text-[11px] hover:bg-panel">
             <span>{status === "available" ? t("textLayer.reextract") : t("textLayer.extract")}</span>
             <input
-              ref={fileRef}
               type="file"
               aria-label={t("textLayer.extract")}
               className="sr-only"

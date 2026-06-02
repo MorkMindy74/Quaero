@@ -12,6 +12,7 @@ vi.mock("../../lib/textLayer", async (importOriginal) => {
 
 import { SourceTextPanel } from "./SourceTextPanel";
 import { extractDocumentText } from "../../lib/extractText";
+import type { ExtractOutcome } from "../../lib/extractText";
 import { sha256Hex } from "../../lib/textLayer";
 import type { SourceText } from "../../lib/ipc";
 
@@ -107,6 +108,62 @@ test("extracting a matching file stores the text and shows 'available'", async (
     expect(screen.getByTestId("text-layer-status")).toHaveTextContent("Testo disponibile"),
   );
   expect(onSet).toHaveBeenCalledWith("m", "s1", SHA, "estratto ok");
+});
+
+test("stale extraction never repaints a newly-selected Fonte (BLOCKER regression)", async () => {
+  const SHA_A = "a".repeat(64);
+  const SHA_B = "b".repeat(64);
+  const srcA: SourceRef = {
+    id: "s1",
+    kind: "Documento",
+    title: "A.pdf",
+    meta: "",
+    file: { storedName: "a.pdf", originalName: "A.pdf", byteLen: 3, sha256: SHA_A },
+  };
+  const srcB: SourceRef = {
+    id: "s2",
+    kind: "Documento",
+    title: "B.pdf",
+    meta: "",
+    file: { storedName: "b.pdf", originalName: "B.pdf", byteLen: 3, sha256: SHA_B },
+  };
+
+  vi.mocked(sha256Hex).mockResolvedValue(SHA_A); // matches A, lets extraction start
+  let resolveExtract!: (v: ExtractOutcome) => void;
+  vi.mocked(extractDocumentText).mockReturnValue(
+    new Promise<ExtractOutcome>((res) => {
+      resolveExtract = res;
+    }),
+  );
+  const onGet = vi.fn(async (_mid: string, _sid: string) => ({ status: "absent" }) as SourceText);
+  const onSet = vi.fn(
+    async (_mid: string, _sid: string, _sha: string, _text: string) =>
+      ({ status: "available", text: "SEGRETO DI A" }) as SourceText,
+  );
+
+  const { rerender } = render(
+    <SourceTextPanel matterId="m" source={srcA} onGet={onGet} onSet={onSet} />,
+  );
+  await screen.findByTestId("text-layer-status");
+
+  // Start extraction on Fonte A; it stays pending.
+  fireEvent.change(screen.getByLabelText("Estrai testo"), { target: { files: [fakeFile()] } });
+  await waitFor(() => expect(extractDocumentText).toHaveBeenCalled());
+
+  // The lawyer selects Fonte B before A's extraction resolves (same instance).
+  rerender(<SourceTextPanel matterId="m" source={srcB} onGet={onGet} onSet={onSet} />);
+  await waitFor(() =>
+    expect(screen.getByTestId("text-layer-status")).toHaveTextContent("Testo non disponibile"),
+  );
+
+  // A's extraction now resolves: text is still persisted to A (correct target)…
+  resolveExtract({ kind: "text", text: "SEGRETO DI A" });
+  await waitFor(() => expect(onSet).toHaveBeenCalledWith("m", "s1", SHA_A, "SEGRETO DI A"));
+
+  // …but B's visible panel must NOT be repainted with A's text/status.
+  expect(screen.getByTestId("text-layer-status")).toHaveTextContent("Testo non disponibile");
+  expect(screen.queryByTestId("text-layer-preview")).not.toBeInTheDocument();
+  expect(screen.queryByText("SEGRETO DI A")).not.toBeInTheDocument();
 });
 
 test("a file whose sha256 differs from the original is refused, nothing stored", async () => {

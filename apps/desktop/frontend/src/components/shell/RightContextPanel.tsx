@@ -410,6 +410,9 @@ function SourcesTab({
 
       {showTextLayer && selectedSource && matterId && onGetSourceText && onSetSourceText && (
         <SourceTextPanel
+          // Remount per matter:source so a fresh panel never inherits an
+          // in-flight extraction's state from a previously-selected Fonte.
+          key={`${matterId}:${selectedSource.id}`}
           matterId={matterId}
           source={selectedSource}
           onGet={onGetSourceText}

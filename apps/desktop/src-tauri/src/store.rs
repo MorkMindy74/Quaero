@@ -1103,10 +1103,12 @@ pub fn set_source_text(
     fs::create_dir_all(&matter_dir)?;
     let sidecar = matter_dir.join(&sidecar_name);
 
-    // Atomic publish: unique temp + rename; temp removed on rename failure.
+    // Atomic publish: unique temp + rename. The temp is removed on ANY pre-rename
+    // failure (e.g. a partial `write` on a full disk) as well as on a rename
+    // failure, so no partial fragment of client text is ever left behind.
     let tmp = unique_tmp(&matter_dir, &file.stored_name);
-    fs::write(&tmp, text.as_bytes())?;
-    if let Err(e) = fs::rename(&tmp, &sidecar) {
+    let publish = fs::write(&tmp, text.as_bytes()).and_then(|()| fs::rename(&tmp, &sidecar));
+    if let Err(e) = publish {
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
     }
@@ -2486,6 +2488,13 @@ mod tests {
         let sidecar = files.path().join("m").join(format!("{stored}.txt"));
         assert!(sidecar.is_file());
         assert_eq!(fs::read_to_string(&sidecar).unwrap(), "Articolo 1. Testo.");
+
+        // No temp residue after a successful publish.
+        let tmp_left = fs::read_dir(files.path().join("m"))
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("tmp"));
+        assert!(!tmp_left, "no .tmp should remain after set_source_text");
     }
 
     #[test]
