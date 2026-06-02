@@ -32,6 +32,7 @@ pub fn run() {
             commands::evidence::propose_evidence_local,
             commands::evidence::evidence_provider_kind,
             commands::evidence::request_evidence_consent,
+            commands::evidence::propose_citations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quaero");

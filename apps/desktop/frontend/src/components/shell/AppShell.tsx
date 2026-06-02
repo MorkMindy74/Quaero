@@ -25,6 +25,7 @@ import {
   proposeEvidenceLocal,
   requestEvidenceConsent,
   evidenceProviderKind,
+  proposeCitations,
 } from "../../lib/ipc";
 import type { LocalEvidenceResult } from "../../lib/ipc";
 import { useWorkspaces } from "../../lib/useWorkspaces";
@@ -255,6 +256,7 @@ export default function AppShell() {
           addExcerptError={addExcerptError}
           onAddCitation={open ? handleAddCitation : undefined}
           addCitationError={addCitationError}
+          onProposeCitations={open ? () => proposeCitations(open.matter.id) : undefined}
           onExportMarkdown={open ? handleExportMarkdown : undefined}
           exportError={exportError}
           onUpdateExcerpt={open ? handleUpdateExcerpt : undefined}

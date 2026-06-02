@@ -6,8 +6,14 @@ import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
 import { SourceTextPanel } from "./SourceTextPanel";
 import { EvidenceCandidatesPanel } from "./EvidenceCandidatesPanel";
+import { CitationCandidatesPanel } from "./CitationCandidatesPanel";
 import { nextActionKey } from "../../lib/pilot";
-import type { SourceText, EvidenceCandidate, LocalEvidenceResult } from "../../lib/ipc";
+import type {
+  SourceText,
+  EvidenceCandidate,
+  LocalEvidenceResult,
+  CitationCandidate,
+} from "../../lib/ipc";
 import {
   workspaceView,
   reasoningSteps,
@@ -116,6 +122,7 @@ function ExcerptsTab({
   onDeleteExcerpt,
   onUpdateCitation,
   onDeleteCitation,
+  onProposeCitations,
 }: {
   excerpts: Excerpt[];
   citations: Citation[];
@@ -130,6 +137,7 @@ function ExcerptsTab({
   onDeleteExcerpt?: (excerptId: string) => Promise<boolean>;
   onUpdateCitation?: (citationId: string, claim: string) => Promise<boolean>;
   onDeleteCitation?: (citationId: string) => Promise<boolean>;
+  onProposeCitations?: () => Promise<CitationCandidate[]>;
 }) {
   const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -238,6 +246,14 @@ function ExcerptsTab({
         <p role="alert" className="text-xs text-accent-warning">
           {deleteBlocked}
         </p>
+      )}
+
+      {onProposeCitations && onAddCitation && excerpts.length > 0 && (
+        <CitationCandidatesPanel
+          excerpts={excerpts}
+          onPropose={onProposeCitations}
+          onAccept={onAddCitation}
+        />
       )}
 
       {excerpts.length === 0 ? (
@@ -564,6 +580,7 @@ export function RightContextPanel({
   onAcceptEvidence,
   evidenceLocalEnabled,
   onProposeEvidenceLocal,
+  onProposeCitations,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -578,6 +595,7 @@ export function RightContextPanel({
   addExcerptError?: string | null;
   onAddCitation?: (excerptId: string, claim: string) => Promise<boolean>;
   addCitationError?: string | null;
+  onProposeCitations?: () => Promise<CitationCandidate[]>;
   onExportMarkdown?: () => Promise<boolean>;
   exportError?: string | null;
   onUpdateExcerpt?: (excerptId: string, args: ExcerptDialogValues) => Promise<boolean>;
@@ -680,6 +698,7 @@ export function RightContextPanel({
             addExcerptError={addExcerptError}
             onAddCitation={onAddCitation}
             addCitationError={addCitationError}
+            onProposeCitations={onProposeCitations}
             onExportMarkdown={onExportMarkdown}
             exportError={exportError}
             onUpdateExcerpt={onUpdateExcerpt}

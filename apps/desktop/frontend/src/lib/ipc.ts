@@ -140,6 +140,25 @@ export function deleteCitation(matterId: string, citationId: string): Promise<Wo
   return invoke<WorkspaceView>("delete_citation", { matterId, citationId });
 }
 
+// --- #60 AI Evidence Assistant V1C: candidate Citazioni ---------------------
+
+/** A proposed Citazione (not persisted). Mirrors the desktop scored candidate:
+ *  always carries the `excerptId` of a real Estratto; `valid=false` means that
+ *  Estratto no longer exists (shown but not approvable). */
+export interface CitationCandidate {
+  excerptId: string;
+  claim: string;
+  reason: string;
+  valid: boolean;
+}
+
+/** Propose candidate Citazioni (#60, V1C) for the real Estratti of a Pratica that
+ *  don't already have a Citazione. Offline Stub: no LLM, no network, no auto-save.
+ *  Approval goes through the canonical `addCitation`. */
+export function proposeCitations(matterId: string): Promise<CitationCandidate[]> {
+  return invoke<CitationCandidate[]>("propose_citations", { matterId });
+}
+
 // --- #52 document text layer -----------------------------------------------
 
 /** Derived text-layer state of a source. Mirrors the desktop store's
