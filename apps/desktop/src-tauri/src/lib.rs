@@ -24,6 +24,8 @@ pub fn run() {
             commands::workspace::delete_citation,
             commands::chat::chat_send,
             commands::chat::chat_provider_kind,
+            commands::evidence::propose_evidence,
+            commands::evidence::accept_evidence_candidate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quaero");

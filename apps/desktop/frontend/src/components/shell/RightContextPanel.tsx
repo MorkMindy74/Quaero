@@ -5,8 +5,9 @@ import { SourceCard, ReasoningStep, GenealogyPreview, NormativeGenealogyCard } f
 import { NewExcerptDialog, type ExcerptDialogValues } from "./NewExcerptDialog";
 import { NewCitationDialog } from "./NewCitationDialog";
 import { SourceTextPanel } from "./SourceTextPanel";
+import { EvidenceCandidatesPanel } from "./EvidenceCandidatesPanel";
 import { nextActionKey } from "../../lib/pilot";
-import type { SourceText } from "../../lib/ipc";
+import type { SourceText, EvidenceCandidate } from "../../lib/ipc";
 import {
   workspaceView,
   reasoningSteps,
@@ -349,6 +350,8 @@ function SourcesTab({
   matterId,
   onGetSourceText,
   onSetSourceText,
+  onProposeEvidence,
+  onAcceptEvidence,
 }: {
   view: WorkspaceView;
   selected: string | null;
@@ -363,6 +366,15 @@ function SourcesTab({
     expectedSha256: string,
     text: string,
   ) => Promise<SourceText>;
+  onProposeEvidence?: (matterId: string, sourceId: string) => Promise<EvidenceCandidate[]>;
+  onAcceptEvidence?: (
+    matterId: string,
+    sourceId: string,
+    anchorKind: string,
+    anchorValue: string,
+    quote: string,
+    note?: string,
+  ) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const { client, matter, sources, dossiers } = view;
@@ -372,12 +384,11 @@ function SourcesTab({
   // Text layer (#52): for a real open Pratica, the selected Documento source
   // gets a text-layer panel (extract/preview). Shown once (not per dossier).
   const selectedSource = selected ? findSource(selected) : undefined;
-  const showTextLayer =
-    !!matterId &&
-    !!onGetSourceText &&
-    !!onSetSourceText &&
-    selectedSource?.kind === "Documento" &&
-    !!selectedSource.file;
+  const isSelectedDocument =
+    !!matterId && selectedSource?.kind === "Documento" && !!selectedSource.file;
+  const showTextLayer = isSelectedDocument && !!onGetSourceText && !!onSetSourceText;
+  // Evidence Assistant (#55): same gating; proposes candidate Estratti.
+  const showEvidence = isSelectedDocument && !!onProposeEvidence && !!onAcceptEvidence;
 
   return (
     <div className="space-y-3">
@@ -417,6 +428,17 @@ function SourcesTab({
           source={selectedSource}
           onGet={onGetSourceText}
           onSet={onSetSourceText}
+        />
+      )}
+
+      {showEvidence && selectedSource && matterId && onProposeEvidence && onAcceptEvidence && (
+        <EvidenceCandidatesPanel
+          // Remount per matter:source so candidates never leak across Fonti.
+          key={`evidence:${matterId}:${selectedSource.id}`}
+          matterId={matterId}
+          source={selectedSource}
+          onPropose={onProposeEvidence}
+          onAccept={onAcceptEvidence}
         />
       )}
 
@@ -529,6 +551,8 @@ export function RightContextPanel({
   onDeleteCitation,
   onGetSourceText,
   onSetSourceText,
+  onProposeEvidence,
+  onAcceptEvidence,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -556,6 +580,15 @@ export function RightContextPanel({
     expectedSha256: string,
     text: string,
   ) => Promise<SourceText>;
+  onProposeEvidence?: (matterId: string, sourceId: string) => Promise<EvidenceCandidate[]>;
+  onAcceptEvidence?: (
+    matterId: string,
+    sourceId: string,
+    anchorKind: string,
+    anchorValue: string,
+    quote: string,
+    note?: string,
+  ) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>("sources");
@@ -616,6 +649,8 @@ export function RightContextPanel({
             matterId={workspace?.matter.id}
             onGetSourceText={onGetSourceText}
             onSetSourceText={onSetSourceText}
+            onProposeEvidence={onProposeEvidence}
+            onAcceptEvidence={onAcceptEvidence}
           />
         )}
         {tab === "excerpts" && (
