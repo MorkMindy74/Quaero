@@ -11,12 +11,14 @@
 //! user prompt + a fixed system prompt are sent — **never** documents, Fonti,
 //! Estratti, quotes, RAG, bytes or files. Non-streaming; ~120s timeout.
 
-use std::time::Duration;
-
 use quaero_core::chat::{ChatReply, ChatRequest, MAX_PROMPT_CHARS};
 use quaero_core::privacy::{DataClass, Decision, Destination, EgressRequest, PrivacyPolicy};
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+use crate::local_model::{
+    build_local_client, map_send_error, map_status_error, validate_local_endpoint,
+};
 
 const DEFAULT_URL: &str = "http://127.0.0.1:11434";
 const DEFAULT_MODEL: &str = "qwen3";
@@ -78,23 +80,8 @@ impl OllamaLocalProvider {
         // 3) Build + send (only prompt + fixed system prompt; nothing else).
         let body = build_request_body(&self.model, prompt);
         let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            // Fail-closed local-only: a local (possibly untrusted) server could
-            // answer with a 3xx `Location: http://evil.example/...`; reqwest's
-            // DEFAULT policy would re-send this same body (system + user prompt)
-            // off-device. A local provider has no legitimate reason to follow a
-            // redirect, not even to another loopback host → disable them entirely.
-            // Any 3xx then stays a non-success status and is handled as an error.
-            .redirect(reqwest::redirect::Policy::none())
-            // Fail-closed local-only #2: reqwest's default client honours ambient
-            // HTTP_PROXY/ALL_PROXY; a configured proxy would receive the prompt
-            // (system + user) before the loopback endpoint is ever reached, even
-            // for a 127.0.0.1 URL. A local provider must never route through a
-            // proxy → disable system/env proxy detection entirely.
-            .no_proxy()
-            .build()
-            .map_err(|e| format!("errore inizializzazione client locale: {e}"))?;
+        // Shared hardened local-only client (redirect off + no proxy + timeout).
+        let client = build_local_client(TIMEOUT_SECS)?;
 
         let resp = client
             .post(&url)
@@ -124,42 +111,6 @@ fn prompt_egress_request() -> EgressRequest {
     }
 }
 
-/// Enforce the local-only invariant **in code** (fail-closed). Accepts only an
-/// `http` URL whose host is loopback (`127.0.0.1`, `localhost`, `::1`), with no
-/// userinfo. Rejects remote hosts, `https`, credentials, and ambiguous URLs such
-/// as `http://127.0.0.1@evil.com` (whose real host is `evil.com`).
-fn validate_local_endpoint(raw: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(raw).map_err(|_| format!("endpoint non valido: {raw}"))?;
-    if url.scheme() != "http" {
-        return Err("endpoint non locale: è consentito solo http su loopback".to_string());
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("endpoint non valido: credenziali nell'URL non consentite".to_string());
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| "endpoint non valido: host assente".to_string())?;
-    if !is_loopback_host(host) {
-        return Err(format!(
-            "endpoint non locale: host {host} non è loopback (bloccato)"
-        ));
-    }
-    Ok(())
-}
-
-/// Loopback iff `localhost` or an IP that `is_loopback()` (handles 127.0.0.0/8
-/// and `::1`, with optional IPv6 brackets).
-fn is_loopback_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    let stripped = host.trim_start_matches('[').trim_end_matches(']');
-    stripped
-        .parse::<std::net::IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
-}
-
 /// Build the `/api/chat` body: system prompt + the user prompt, `stream:false`.
 /// Deliberately carries NOTHING else (no documents/Estratti/Fonti/RAG).
 fn build_request_body(model: &str, prompt: &str) -> Value {
@@ -187,31 +138,6 @@ fn extract_reply(response: OllamaChatResponse) -> Result<String, String> {
     match response.message {
         Some(m) if !m.content.trim().is_empty() => Ok(m.content),
         _ => Err("il modello locale ha restituito una risposta vuota".to_string()),
-    }
-}
-
-/// Map a transport error to a friendly, local-only message.
-fn map_send_error(e: reqwest::Error) -> String {
-    if e.is_connect() {
-        "modello locale non disponibile — avvia Ollama (http://127.0.0.1:11434)".to_string()
-    } else if e.is_timeout() {
-        "il modello locale non ha risposto entro il tempo limite".to_string()
-    } else {
-        format!("errore di comunicazione con il modello locale: {e}")
-    }
-}
-
-/// Map a non-2xx status to a friendly message.
-fn map_status_error(code: u16) -> String {
-    match code {
-        404 => "modello non trovato in Ollama (verifica il nome del modello)".to_string(),
-        // Redirects are disabled (local-only): a 3xx is never followed and is
-        // surfaced as an error so the prompt never leaves loopback via Location.
-        300..=399 => {
-            "il modello locale ha tentato un redirect (bloccato: nessun dato esce da loopback)"
-                .to_string()
-        }
-        other => format!("il modello locale ha risposto con stato {other}"),
     }
 }
 
@@ -273,16 +199,6 @@ mod tests {
 
         let none = OllamaChatResponse { message: None };
         assert!(extract_reply(none).is_err());
-    }
-
-    #[test]
-    fn status_errors_are_friendly() {
-        assert!(map_status_error(404).contains("modello non trovato"));
-        assert!(map_status_error(500).contains("stato 500"));
-        // Any 3xx is reported as a blocked redirect (never followed).
-        assert!(map_status_error(307).contains("redirect"));
-        assert!(map_status_error(308).contains("redirect"));
-        assert!(map_status_error(301).contains("redirect"));
     }
 
     /// Regression for the Codex critical: a local server returning a 3xx
@@ -408,35 +324,6 @@ mod tests {
             Err(e) => panic!("unexpected proxy accept error: {e}"),
         }
         ollama_thread.join().ok();
-    }
-
-    #[test]
-    fn local_endpoints_are_accepted() {
-        for ok in [
-            "http://127.0.0.1:11434",
-            "http://127.0.0.1",
-            "http://localhost:11434",
-            "http://localhost",
-            "http://[::1]:11434",
-        ] {
-            assert!(validate_local_endpoint(ok).is_ok(), "should accept {ok}");
-        }
-    }
-
-    #[test]
-    fn non_local_endpoints_are_rejected_fail_closed() {
-        for bad in [
-            "http://remote.example:11434", // remote host
-            "http://192.168.1.5:11434",    // LAN, not loopback
-            "https://127.0.0.1:11434",     // https not allowed
-            "http://user:pass@127.0.0.1",  // userinfo
-            "http://127.0.0.1@evil.com",   // ambiguous: real host is evil.com
-            "https://ollama.com/api",      // cloud
-            "ftp://127.0.0.1",             // wrong scheme
-            "not-a-url",                   // unparseable
-        ] {
-            assert!(validate_local_endpoint(bad).is_err(), "must reject {bad}");
-        }
     }
 
     #[test]

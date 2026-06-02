@@ -2,6 +2,7 @@
 //! maps IPC commands onto pure core logic (ADR-0011); it holds no domain logic.
 
 mod commands;
+mod local_model;
 mod ollama;
 mod store;
 
