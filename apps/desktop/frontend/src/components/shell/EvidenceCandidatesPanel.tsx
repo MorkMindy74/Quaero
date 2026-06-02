@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button } from "../ui";
 import type { SourceRef } from "../../domain/types";
@@ -36,6 +36,12 @@ export function EvidenceCandidatesPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // Per-row "approval in flight" guard. The ref blocks a synchronous double-click
+  // (state updates are async, so a stale `accepting` could let a second call
+  // through); the state mirror just disables the button in the UI.
+  const acceptingRef = useRef<Set<string>>(new Set());
+  const [accepting, setAccepting] = useState<readonly string[]>([]);
+  const isAccepting = (key: string) => accepting.includes(key);
 
   const patch = (key: string, p: Partial<Row>) =>
     setRows((rs) => rs?.map((r) => (r.key === key ? { ...r, ...p } : r)) ?? rs);
@@ -55,20 +61,30 @@ export function EvidenceCandidatesPanel({
   };
 
   const approve = async (row: Row) => {
+    // Re-entrancy guard: one approval per candidate at a time, so a double-click
+    // can never persist the same candidate as two real Estratti.
+    if (row.created || acceptingRef.current.has(row.key)) return;
+    acceptingRef.current.add(row.key);
+    setAccepting([...acceptingRef.current]);
     patch(row.key, { error: null });
-    const ok = await onAccept(
-      matterId,
-      source.id,
-      row.anchorKind,
-      row.anchorValue,
-      row.quote,
-      row.reason,
-    );
-    if (ok) {
-      patch(row.key, { created: true });
-      setEditing(null);
-    } else {
-      patch(row.key, { error: t("evidenceAI.acceptError") });
+    try {
+      const ok = await onAccept(
+        matterId,
+        source.id,
+        row.anchorKind,
+        row.anchorValue,
+        row.quote,
+        row.reason,
+      );
+      if (ok) {
+        patch(row.key, { created: true });
+        setEditing(null);
+      } else {
+        patch(row.key, { error: t("evidenceAI.acceptError") });
+      }
+    } finally {
+      acceptingRef.current.delete(row.key);
+      setAccepting([...acceptingRef.current]);
     }
   };
 
@@ -161,8 +177,13 @@ export function EvidenceCandidatesPanel({
 
           {!row.created && (
             <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-hairline pt-2">
-              <button type="button" className={linkBtn} onClick={() => void approve(row)}>
-                {t("evidenceAI.approve")}
+              <button
+                type="button"
+                className={linkBtn}
+                disabled={isAccepting(row.key)}
+                onClick={() => void approve(row)}
+              >
+                {isAccepting(row.key) ? t("evidenceAI.approving") : t("evidenceAI.approve")}
               </button>
               <button
                 type="button"

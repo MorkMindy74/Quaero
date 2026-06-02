@@ -78,6 +78,28 @@ test("discarding a candidate removes it without persisting", async () => {
   expect(onAccept).not.toHaveBeenCalled();
 });
 
+test("double-clicking Approva creates the Estratto only once (re-entrancy guard)", async () => {
+  let resolveAccept!: (v: boolean) => void;
+  const { onAccept } = renderPanel({
+    accept: () =>
+      new Promise<boolean>((r) => {
+        resolveAccept = r;
+      }),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Proponi Evidence" }));
+  await screen.findAllByTestId("evidence-candidate");
+
+  const approveBtn = screen.getAllByRole("button", { name: "Approva → crea Estratto" })[0];
+  fireEvent.click(approveBtn); // first approval, IPC in flight (pending)
+  fireEvent.click(approveBtn); // second click before it resolves — must be ignored
+
+  resolveAccept(true);
+  await waitFor(() =>
+    expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Estratto creato"),
+  );
+  expect(onAccept).toHaveBeenCalledTimes(1);
+});
+
 test("a rejected approval (quote not in text) surfaces an error, nothing created", async () => {
   renderPanel({ accept: async () => false });
   fireEvent.click(screen.getByRole("button", { name: "Proponi Evidence" }));

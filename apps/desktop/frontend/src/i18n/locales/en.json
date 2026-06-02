@@ -71,6 +71,7 @@
   "evidenceAI.unsaved": "not saved",
   "evidenceAI.created": "Excerpt created",
   "evidenceAI.approve": "Approve → create Excerpt",
+  "evidenceAI.approving": "Creating…",
   "evidenceAI.edit": "Edit",
   "evidenceAI.editDone": "Done editing",
   "evidenceAI.discard": "Discard",
