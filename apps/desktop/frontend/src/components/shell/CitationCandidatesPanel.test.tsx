@@ -30,7 +30,7 @@ test("proposes citation candidates (not saved), valid + invalid", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Proponi Citazioni" }));
   await waitFor(() => expect(screen.getAllByTestId("citation-candidate")).toHaveLength(2));
   const statuses = screen.getAllByTestId("citation-candidate-status");
-  expect(statuses[0]).toHaveTextContent("non salvata");
+  expect(statuses[0]).toHaveTextContent("Proposta — da approvare");
   expect(statuses[1]).toHaveTextContent("non valida");
   // The linked excerpt quote is shown for the valid one.
   expect(screen.getByText("“Il conduttore è tenuto.”")).toBeInTheDocument();
@@ -49,7 +49,7 @@ test("only the valid candidate is approvable; approve uses the canonical path", 
   await waitFor(() => expect(onAccept).toHaveBeenCalledWith("e1", "Affermazione su e1."));
   await waitFor(() =>
     expect(screen.getAllByTestId("citation-candidate-status")[0]).toHaveTextContent(
-      "Citazione creata",
+      "Confermato",
     ),
   );
 });
@@ -81,7 +81,7 @@ test("double-clicking Approva creates the Citation only once (re-entrancy guard)
   resolveAccept(true);
   await waitFor(() =>
     expect(screen.getAllByTestId("citation-candidate-status")[0]).toHaveTextContent(
-      "Citazione creata",
+      "Confermato",
     ),
   );
   expect(onAccept).toHaveBeenCalledTimes(1);

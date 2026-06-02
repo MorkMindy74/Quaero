@@ -6,7 +6,12 @@ import type { CitationCandidate } from "../../lib/ipc";
 
 /** A candidate row. `valid` = its excerptId references an existing real Estratto.
  *  Candidates are NEVER persisted until approved; `created` flips after that. */
-type Row = CitationCandidate & { key: string; created: boolean; error: string | null };
+type Row = CitationCandidate & {
+  key: string;
+  created: boolean;
+  error: string | null;
+  edited: boolean;
+};
 
 /** AI Evidence Assistant V1C (#60). From the real Estratti of a Pratica without a
  *  Citazione yet, proposes candidate Citazioni (offline Stub — no LLM, no egress).
@@ -43,7 +48,9 @@ export function CitationCandidatesPanel({
     setBusy(true);
     try {
       const cands = await onPropose();
-      setRows(cands.map((c, i) => ({ ...c, key: `cit-${i}`, created: false, error: null })));
+      setRows(
+        cands.map((c, i) => ({ ...c, key: `cit-${i}`, created: false, error: null, edited: false })),
+      );
     } catch {
       setError(t("citationAI.proposeError"));
     } finally {
@@ -87,9 +94,11 @@ export function CitationCandidatesPanel({
   const statusLabel = (row: Row) =>
     row.created
       ? t("citationAI.created")
-      : row.valid
-        ? t("citationAI.unsaved")
-        : t("citationAI.invalid");
+      : !row.valid
+        ? t("citationAI.invalid")
+        : row.edited
+          ? t("citationAI.draft")
+          : t("citationAI.unsaved");
   const statusTone = (row: Row): "default" | "verified" | "warning" =>
     row.created ? "verified" : row.valid ? "default" : "warning";
 
@@ -149,7 +158,7 @@ export function CitationCandidatesPanel({
                 className="mt-1 w-full rounded border border-hairline bg-panel p-1 text-sm"
                 rows={2}
                 value={row.claim}
-                onChange={(e) => patch(row.key, { claim: e.target.value })}
+                onChange={(e) => patch(row.key, { claim: e.target.value, edited: true })}
               />
             ) : (
               <div className="mt-1 text-sm">↳ {row.claim}</div>

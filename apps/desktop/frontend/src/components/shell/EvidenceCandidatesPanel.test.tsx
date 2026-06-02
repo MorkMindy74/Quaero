@@ -40,9 +40,9 @@ test("proposes candidates (not saved) on demand", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Proponi Evidence" }));
   await waitFor(() => expect(screen.getAllByTestId("evidence-candidate")).toHaveLength(2));
   expect(screen.getByText("“Articolo 1. Il conduttore è tenuto.”")).toBeInTheDocument();
-  // Both start as "non salvato".
+  // Both start as "Proposta — da approvare".
   const badges = screen.getAllByTestId("evidence-candidate-status");
-  expect(badges[0]).toHaveTextContent("non salvato");
+  expect(badges[0]).toHaveTextContent("Proposta — da approvare");
 });
 
 test("approving a candidate creates a real Estratto with the right args", async () => {
@@ -63,7 +63,7 @@ test("approving a candidate creates a real Estratto with the right args", async 
     ),
   );
   await waitFor(() =>
-    expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Estratto creato"),
+    expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Confermato"),
   );
 });
 
@@ -95,7 +95,7 @@ test("double-clicking Approva creates the Estratto only once (re-entrancy guard)
 
   resolveAccept(true);
   await waitFor(() =>
-    expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Estratto creato"),
+    expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Confermato"),
   );
   expect(onAccept).toHaveBeenCalledTimes(1);
 });
@@ -108,7 +108,7 @@ test("a rejected approval (quote not in text) surfaces an error, nothing created
   fireEvent.click(screen.getAllByRole("button", { name: "Approva → crea Estratto" })[0]);
 
   expect(await screen.findByRole("alert")).toHaveTextContent("non presente nella Fonte");
-  expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("non salvato");
+  expect(screen.getAllByTestId("evidence-candidate-status")[0]).toHaveTextContent("Proposta — da approvare");
 });
 
 test("empty proposal (no text layer) shows a hint", async () => {
@@ -168,7 +168,7 @@ test("confirming consent calls the local provider; invalid candidates are not ap
   await waitFor(() => expect(screen.getAllByTestId("evidence-candidate")).toHaveLength(2));
 
   const statuses = screen.getAllByTestId("evidence-candidate-status");
-  expect(statuses[0]).toHaveTextContent("non salvato");
+  expect(statuses[0]).toHaveTextContent("Proposta — da approvare");
   expect(statuses[1]).toHaveTextContent("non valido");
   // Only the valid candidate is approvable.
   expect(screen.getAllByRole("button", { name: "Approva → crea Estratto" })).toHaveLength(1);
