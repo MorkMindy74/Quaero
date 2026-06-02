@@ -89,7 +89,7 @@ test("the command palette stub opens from the ⌘K trigger", () => {
 
 test("the status strip shows the local/privacy signal", () => {
   render(<App />);
-  expect(within(screen.getByTestId("region-status")).getByText("Locale e privato")).toBeInTheDocument();
+  expect(within(screen.getByTestId("region-status")).getByText(/Nessun dato inviato al cloud/)).toBeInTheDocument();
 });
 
 test("language toggle switches Italian to English (regression from #2)", async () => {

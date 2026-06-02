@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui";
 import type { Excerpt } from "../../domain/types";
@@ -25,6 +25,16 @@ export function NewCitationDialog({ excerpt, initialClaim, onClose, onSubmit, er
 
   const canSubmit = claim.trim() !== "" && !busy;
 
+  // #57: close only on explicit action. Esc closes; clicking outside does NOT
+  // (the lawyer must never lose the text being typed).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
@@ -41,7 +51,6 @@ export function NewCitationDialog({ excerpt, initialClaim, onClose, onSubmit, er
       role="dialog"
       aria-label={title}
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 pt-24"
-      onClick={onClose}
     >
       <form
         className="w-[440px] rounded-lg border border-hairline bg-panel p-4 shadow-xl"

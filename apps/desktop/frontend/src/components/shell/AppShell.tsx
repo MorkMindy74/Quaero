@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { TopCommandBar } from "./TopCommandBar";
 import { LeftSidebar } from "./LeftSidebar";
 import { MainWorkspace } from "./MainWorkspace";
-import { RightContextPanel } from "./RightContextPanel";
+import { RightContextPanel, type TabId } from "./RightContextPanel";
 import { StatusStrip } from "./StatusStrip";
 import { CommandPalette } from "./CommandPalette";
 import { NewMatterDialog } from "./NewMatterDialog";
@@ -53,6 +53,8 @@ export default function AppShell() {
   const [exportError, setExportError] = useState<string | null>(null);
   // #58: is the local Ollama Evidence provider opted-in AND loopback-valid?
   const [evidenceLocalEnabled, setEvidenceLocalEnabled] = useState(false);
+  // #62: active right-panel tab, lifted here so the central guide can jump to it.
+  const [rightTab, setRightTab] = useState<TabId>("sources");
 
   const openById = async (id: string) => {
     setOpenError(null);
@@ -247,7 +249,12 @@ export default function AppShell() {
           onNew={() => setNewOpen(true)}
           activeId={open?.matter.id ?? null}
         />
-        <MainWorkspace matter={matter} />
+        <MainWorkspace
+          matter={matter}
+          workspace={open ?? undefined}
+          onGoToTab={setRightTab}
+          onExport={handleExportMarkdown}
+        />
         <RightContextPanel
           workspace={open ?? undefined}
           onImportFile={open ? (file) => void handleImport(file) : undefined}
@@ -269,6 +276,8 @@ export default function AppShell() {
           onAcceptEvidence={open ? handleAcceptEvidence : undefined}
           evidenceLocalEnabled={evidenceLocalEnabled}
           onProposeEvidenceLocal={open ? handleProposeEvidenceLocal : undefined}
+          tab={rightTab}
+          onTabChange={setRightTab}
         />
       </div>
       <StatusStrip />

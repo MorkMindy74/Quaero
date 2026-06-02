@@ -42,25 +42,20 @@ export function StatusStrip() {
       role="contentinfo"
       className="flex items-center gap-3 border-t border-hairline bg-panel px-4 py-1.5 font-mono text-[11px] text-muted"
     >
+      {/* #62: human-first headline. The technical posture below is secondary. */}
       <span className="inline-flex items-center gap-1.5 text-accent-verified">
-        <span className="h-2 w-2 rounded-full bg-accent-verified" /> {t("status.localPrivate")}
+        <span className="h-2 w-2 rounded-full bg-accent-verified" /> {t("status.privacyHeadline")}
       </span>
       {sep}
-      {/* #10/#37 Privacy Guard posture, DERIVED from the active provider.
-          stub → offline; ollamaLocal → local model active. Both: no data leaves
-          the device. A future REMOTE provider must make this conditional. */}
-      <span data-testid="status-privacy">
+      {/* #10/#37 Privacy Guard posture, DERIVED from the active provider —
+          secondary detail. stub → offline; ollamaLocal → local model active. */}
+      <span data-testid="status-privacy" className="opacity-70">
         {provider === "ollamaLocal" ? t("status.privacyLocalModel") : t("status.privacyStub")}
       </span>
       {sep}
-      <span data-testid="status-connectivity">
+      <span data-testid="status-connectivity" className="opacity-70">
         {core === "ok" ? t("status.coreActive") : core === "err" ? t("status.coreErr") : "…"}
       </span>
-      {sep}
-      <span>{t("status.sourcesVerified")}</span>
-      {sep}
-      <span className="text-accent-warning">{t("status.timeCheck")}</span>
-      <span className="ml-auto">{t("status.indexing")}</span>
     </footer>
   );
 }

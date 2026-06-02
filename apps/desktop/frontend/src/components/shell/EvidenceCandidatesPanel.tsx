@@ -12,6 +12,7 @@ type Row = EvidenceCandidate & {
   created: boolean;
   error: string | null;
   valid: boolean;
+  edited: boolean;
 };
 
 /** AI Evidence Assistant (#55 V1A + #58 V1B). For a selected Documento with a
@@ -70,7 +71,14 @@ export function EvidenceCandidatesPanel({
     try {
       const cands = await onPropose(matterId, source.id);
       setRows(
-        cands.map((c, i) => ({ ...c, key: `stub-${i}`, created: false, error: null, valid: true })),
+        cands.map((c, i) => ({
+          ...c,
+          key: `stub-${i}`,
+          created: false,
+          error: null,
+          valid: true,
+          edited: false,
+        })),
       );
     } catch {
       setError(t("evidenceAI.proposeError"));
@@ -96,6 +104,7 @@ export function EvidenceCandidatesPanel({
           created: false,
           error: null,
           valid: c.valid,
+          edited: false,
         })),
       );
       if (res.truncated) setNotice(t("evidenceAI.truncated", { chars: res.analyzedChars }));
@@ -141,9 +150,11 @@ export function EvidenceCandidatesPanel({
   const statusLabel = (row: Row) =>
     row.created
       ? t("evidenceAI.created")
-      : row.valid
-        ? t("evidenceAI.unsaved")
-        : t("evidenceAI.invalid");
+      : !row.valid
+        ? t("evidenceAI.invalid")
+        : row.edited
+          ? t("evidenceAI.draft")
+          : t("evidenceAI.unsaved");
   const statusTone = (row: Row): "default" | "verified" | "warning" =>
     row.created ? "verified" : row.valid ? "default" : "warning";
 
@@ -226,20 +237,20 @@ export function EvidenceCandidatesPanel({
                 className="w-full rounded border border-hairline bg-panel p-1 text-sm"
                 rows={3}
                 value={row.quote}
-                onChange={(e) => patch(row.key, { quote: e.target.value })}
+                onChange={(e) => patch(row.key, { quote: e.target.value, edited: true })}
               />
               <div className="flex gap-1">
                 <input
                   aria-label={t("evidenceAI.anchorKind")}
                   className="w-1/2 rounded border border-hairline bg-panel p-1 text-xs"
                   value={row.anchorKind}
-                  onChange={(e) => patch(row.key, { anchorKind: e.target.value })}
+                  onChange={(e) => patch(row.key, { anchorKind: e.target.value, edited: true })}
                 />
                 <input
                   aria-label={t("evidenceAI.anchorValue")}
                   className="w-1/2 rounded border border-hairline bg-panel p-1 text-xs"
                   value={row.anchorValue}
-                  onChange={(e) => patch(row.key, { anchorValue: e.target.value })}
+                  onChange={(e) => patch(row.key, { anchorValue: e.target.value, edited: true })}
                 />
               </div>
             </div>

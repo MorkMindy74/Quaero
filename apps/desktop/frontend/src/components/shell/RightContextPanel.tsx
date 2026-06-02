@@ -31,7 +31,7 @@ import {
   type Finding,
 } from "../../domain/types";
 
-type TabId =
+export type TabId =
   | "sources"
   | "excerpts"
   | "reasoning"
@@ -585,6 +585,8 @@ export function RightContextPanel({
   evidenceLocalEnabled,
   onProposeEvidenceLocal,
   onProposeCitations,
+  tab: controlledTab,
+  onTabChange,
 }: {
   workspace?: WorkspaceView;
   onImportFile?: (file: File) => void;
@@ -627,9 +629,15 @@ export function RightContextPanel({
     matterId: string,
     sourceId: string,
   ) => Promise<LocalEvidenceResult>;
+  /** Controlled active tab (so the central guide can jump here). Falls back to
+   *  internal state when not provided. */
+  tab?: TabId;
+  onTabChange?: (tab: TabId) => void;
 }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<TabId>("sources");
+  const [internalTab, setInternalTab] = useState<TabId>("sources");
+  const tab = controlledTab ?? internalTab;
+  const setTab = onTabChange ?? setInternalTab;
   const [selected, setSelected] = useState<string | null>(null);
 
   const view = workspace ?? workspaceView;

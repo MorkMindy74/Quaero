@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui";
 import type { SourceRef } from "../../domain/types";
@@ -43,6 +43,15 @@ export function NewExcerptDialog({ sources, initial, onClose, onSubmit, error }:
     anchorValue.trim() !== "" &&
     !busy;
 
+  // #57: close only on explicit action. Esc closes; clicking outside does NOT.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
@@ -65,7 +74,6 @@ export function NewExcerptDialog({ sources, initial, onClose, onSubmit, error }:
       role="dialog"
       aria-label={title}
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 pt-24"
-      onClick={onClose}
     >
       <form
         className="w-[440px] rounded-lg border border-hairline bg-panel p-4 shadow-xl"
